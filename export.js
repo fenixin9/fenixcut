@@ -19,12 +19,20 @@ async function pickCodec(w,h,fps,bitrate){
   }
   return null;
 }
-let _mux=null;
+async function importAny(urls,test){
+  for(const u of urls){try{const m=await import(u);if(test(m))return m;}catch(e){console.warn('import falhou',u,e);}}
+  return null;
+}
+let _mux=null,_mb=null;
 async function loadMuxer(){
   if(_mux)return _mux;
-  const urls=['https://esm.sh/mp4-muxer@5.2.1','https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.1/+esm'];
-  for(const u of urls){try{_mux=await import(u);if(_mux.Muxer)return _mux;}catch(e){console.warn('muxer',u,e);}}
-  throw new Error('Não consegui carregar o módulo MP4 (verifica a internet).');
+  _mux=await importAny(['https://esm.sh/mp4-muxer@5.2.1','https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.1/+esm'],m=>m.Muxer);
+  if(!_mux)throw new Error('Módulo MP4 indisponível (verifica a internet).');return _mux;
+}
+async function loadMB(){
+  if(_mb)return _mb;
+  _mb=await importAny(['https://esm.sh/mediabunny@1.59.1','https://cdn.jsdelivr.net/npm/mediabunny@1.59.1/+esm'],m=>m.Output&&m.CanvasSource);
+  if(!_mb)throw new Error('Módulo de exportação indisponível (verifica a internet).');return _mb;
 }
 let _dctx=null;const _abCache={};
 async function getAB(srcId){
@@ -34,7 +42,7 @@ async function getAB(srcId){
     _dctx=_dctx||new(window.AudioContext||window.webkitAudioContext)();
     const ab=await SRC[srcId].file.arrayBuffer();
     buf=await _dctx.decodeAudioData(ab);
-  }catch(e){console.warn('Áudio não descodificado',SRC[srcId].name,e);}
+  }catch(e){console.warn('Áudio não descodificado',SRC[srcId].name,e);logErr('áudio: '+SRC[srcId].name+' '+e.message);}
   _abCache[srcId]=buf;return buf;
 }
 async function mixAudio(sr,ch){
@@ -55,9 +63,76 @@ function seekTo(v,t){
     v.addEventListener('seeked',fin);setTimeout(fin,1500);v.currentTime=t;
   });
 }
-async function exportWebCodecs(o,onProg,ctl){
-  const{w,h,fps,cfg}=o;const total=S.total,N=Math.max(1,Math.ceil(total*fps));
+const _sinks={};
+async function getSink(MB,id){
+  if(id in _sinks)return _sinks[id];
+  let r=null;
+  try{
+    const inp=new MB.Input({formats:MB.ALL_FORMATS,source:new MB.BlobSource(SRC[id].file)});
+    const tr=await inp.getPrimaryVideoTrack();
+    if(tr&&await tr.canDecode())r=new MB.CanvasSink(tr);
+  }catch(e){console.warn('sink',e);}
+  _sinks[id]=r;return r;
+}
+/* 1) Exportação rápida: descodifica em sequência (sem seeks) + codifica com WebCodecs */
+async function exportMB(o,onProg,ctl){
+  if(!hasWC())throw new Error('WebCodecs indisponível');
+  const{w,h,fps}=o;const MB=await loadMB();
   onProg(0,'A preparar…');
+  const format=new MB.Mp4OutputFormat();
+  const vcodec=await MB.getFirstEncodableVideoCodec(format.getSupportedVideoCodecs(),{width:w,height:h});
+  if(!vcodec)throw new Error(`Este aparelho não codifica ${w}×${h}`);
+  const R=createRenderer(w,h);
+  const output=new MB.Output({format,target:new MB.BufferTarget()});
+  let vs;
+  try{vs=new MB.CanvasSource(R.out,{codec:vcodec,bitrate:o.bitrate});}
+  catch(e){vs=new MB.CanvasSource(R.out,{codec:vcodec,quality:new MB.Quality('high')});}
+  output.addVideoTrack(vs,{frameRate:fps});
+  let abuf=null,as=null;
+  if(o.audio){
+    try{
+      const ac=await MB.getFirstEncodableAudioCodec(format.getSupportedAudioCodecs());
+      if(ac){onProg(0,'A processar áudio…');abuf=await mixAudio(48000,2);if(abuf){as=new MB.AudioBufferSource({codec:ac,bitrate:160000});output.addAudioTrack(as);}}
+    }catch(e){console.warn('áudio',e);}
+  }
+  try{
+    await output.start();
+    const N=Math.max(1,Math.ceil(S.total*fps-1e-6));let done=0;
+    for(const c of S.clips){
+      const i0=Math.max(0,Math.ceil(c.tStart*fps-1e-6)),i1=Math.min(N,Math.ceil((c.tStart+c.dur)*fps-1e-6));
+      if(i1<=i0)continue;
+      const idx=[],times=[];for(let i=i0;i<i1;i++){idx.push(i);times.push(srcTimeAt(c,i/fps));}
+      const sk=await getSink(MB,c.src);
+      const emit=async(i,img)=>{
+        if(ctl.cancel)throw new Error('cancelado');
+        renderScene(R,i/fps,{clip:c,img});
+        await vs.add(i/fps,1/fps);
+        done++;if(done%3===0){onProg(done/N*(abuf?0.94:0.98),`A processar frame ${done}/${N}`);await sleep(0);}
+      };
+      if(sk){
+        let k=0,last=null;
+        for await(const r of sk.canvasesAtTimestamps(times)){
+          const img=r?r.canvas:last;last=img;
+          await emit(idx[k++],img||SRC[c.src].video);
+        }
+        while(k<idx.length)await emit(idx[k++],last||SRC[c.src].video);
+      }else{
+        const v=SRC[c.src].video;v.pause();v.muted=true;
+        for(let k=0;k<idx.length;k++){await seekTo(v,times[k]);await emit(idx[k],v);}
+      }
+    }
+    if(as){onProg(0.95,'A juntar áudio…');await as.add(abuf);}
+    onProg(0.98,'A finalizar ficheiro…');
+    await output.finalize();
+    onProg(1,'Concluído');
+    return{blob:new Blob([output.target.buffer],{type:'video/mp4'}),ext:'mp4'};
+  }catch(e){try{await output.cancel();}catch(_){}throw e;}
+  finally{R.dispose();}
+}
+/* 2) Alternativa: seeks frame a frame + mp4-muxer */
+async function exportWebCodecs(o,onProg,ctl){
+  const{w,h,fps,cfg}=o;const total=S.total,N=Math.max(1,Math.ceil(total*fps-1e-6));
+  onProg(0,'A preparar (modo alternativo)…');
   const{Muxer,ArrayBufferTarget}=await loadMuxer();
   let abuf=null;const ac={codec:'mp4a.40.2',sampleRate:48000,numberOfChannels:2,bitrate:160000};
   if(o.audio&&('AudioEncoder' in window)){
@@ -100,6 +175,7 @@ async function exportWebCodecs(o,onProg,ctl){
     return{blob:new Blob([target.buffer],{type:'video/mp4'}),ext:'mp4'};
   }finally{R.dispose();try{venc.state!=='closed'&&venc.close();}catch(e){}}
 }
+/* 3) Último recurso: gravação em tempo real */
 const _nodes={};
 async function exportRealtime(o,onProg,ctl){
   const{w,h,fps,bitrate}=o;const total=S.total;
@@ -137,4 +213,13 @@ async function exportRealtime(o,onProg,ctl){
     R.dispose();
   }
   return{blob:new Blob(chunks,{type:mime.split(';')[0]}),ext:mime.includes('mp4')?'mp4':'webm'};
+}
+async function runExport(o,set,ctl){
+  if(o.method!=='rt'){
+    try{return await exportMB(o,set,ctl);}catch(e){if(e.message==='cancelado')throw e;console.warn('MB',e);logErr('export rápido: '+e.message);}
+    const cfg=await pickCodec(o.w,o.h,o.fps,o.bitrate);
+    if(cfg){try{o.cfg=cfg;set(0,'A tentar modo alternativo…');return await exportWebCodecs(o,set,ctl);}catch(e){if(e.message==='cancelado')throw e;console.warn('WC',e);logErr('export alternativo: '+e.message);}}
+    toast('Exportação rápida indisponível aqui. A usar modo compatível (tempo real, máx. qualidade do navegador).',6000);
+  }
+  return await exportRealtime(o,set,ctl);
 }
