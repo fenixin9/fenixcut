@@ -74,7 +74,6 @@ async function getSink(MB,id){
   }catch(e){console.warn('sink',e);}
   _sinks[id]=r;return r;
 }
-/* 1) Exportação rápida: descodifica em sequência (sem seeks) + codifica com WebCodecs */
 async function exportMB(o,onProg,ctl){
   if(!hasWC())throw new Error('WebCodecs indisponível');
   const{w,h,fps}=o;const MB=await loadMB();
@@ -129,7 +128,6 @@ async function exportMB(o,onProg,ctl){
   }catch(e){try{await output.cancel();}catch(_){}throw e;}
   finally{R.dispose();}
 }
-/* 2) Alternativa: seeks frame a frame + mp4-muxer */
 async function exportWebCodecs(o,onProg,ctl){
   const{w,h,fps,cfg}=o;const total=S.total,N=Math.max(1,Math.ceil(total*fps-1e-6));
   onProg(0,'A preparar (modo alternativo)…');
@@ -175,7 +173,6 @@ async function exportWebCodecs(o,onProg,ctl){
     return{blob:new Blob([target.buffer],{type:'video/mp4'}),ext:'mp4'};
   }finally{R.dispose();try{venc.state!=='closed'&&venc.close();}catch(e){}}
 }
-/* 3) Último recurso: gravação em tempo real */
 const _nodes={};
 async function exportRealtime(o,onProg,ctl){
   const{w,h,fps,bitrate}=o;const total=S.total;

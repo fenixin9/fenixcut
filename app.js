@@ -1,9 +1,9 @@
 
 'use strict';
 const $=id=>document.getElementById(id);
-const S={ratio:[9,16],fit:'cover',clips:[],texts:[],caps:[],capStyle:{preset:'pop',size:70,y:72,font:'Montserrat',upper:false},t:0,total:0,playing:false,sel:null,tab:'clip',pps:60,exporting:false};
+const S={ratio:[9,16],fit:'cover',clips:[],texts:[],caps:[],capStyle:{preset:'pop',size:70,y:72,font:'auto',upper:false,hi:'#ffd23f',color:'#ffffff',offset:0},t:0,total:0,playing:false,sel:null,tab:'clip',pps:60,exporting:false};
 const SRC={};let uid=1;const nid=()=>'i'+(uid++);
-const FONTS=['Montserrat','Bebas Neue','Pacifico','Satoshi'];
+const FONTS=['Montserrat','Anton','Bebas Neue','Bangers','Pacifico','Satoshi'];
 const ICON={
  play:'<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>',
  pause:'<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',
@@ -21,6 +21,15 @@ window.addEventListener('error',e=>{logErr((e.message||'erro')+' @'+String(e.fil
 window.addEventListener('unhandledrejection',e=>{logErr('promise: '+((e.reason&&e.reason.message)||e.reason));});
 const CFG=(()=>{try{return JSON.parse(localStorage.getItem('fenixcut')||'{}');}catch(e){return{};}})();
 const saveCFG=()=>{try{localStorage.setItem('fenixcut',JSON.stringify(CFG));}catch(e){}};
+let _cfgImported=false;
+(function(){
+  const h=location.hash;
+  if(h.indexOf('#cfg=')===0){
+    try{const o=JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(h.slice(5))))));Object.assign(CFG,o);saveCFG();_cfgImported=true;}catch(e){}
+    try{history.replaceState(null,'',location.pathname+location.search);}catch(e){}
+  }
+})();
+const b64enc=o=>btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 
 /* ---------- modelo ---------- */
 function layout(){let t=0;for(const c of S.clips){c.tStart=t;c.dur=Math.max(0.05,(c.out-c.in)/c.speed);t+=c.dur;}S.total=t;}
@@ -95,7 +104,15 @@ let lastTT='',lastPH=-1;
 function tick(now){
   if(!S.exporting){
     if(S.playing){
-      S.t=playT0+(now-playWall)/1000;
+      let t=playT0+(now-playWall)/1000;
+      const c=clipAt(S.t),v=c&&SRC[c.src].video;
+      if(v){
+        if(!v.paused&&!v.seeking&&v.readyState>=3){
+          const vt=c.tStart+(v.currentTime-c.in)/c.speed;
+          if(Math.abs(vt-t)<0.6){t=vt;}
+        }else if(v.seeking||(!v.paused&&v.readyState<3)){t=S.t;}
+      }
+      playT0=t;playWall=now;S.t=t;
       if(S.t>=S.total){S.t=S.total;pause();}else syncPlayback(S.t,PREV,false);
       dirty=true;
     }
@@ -174,13 +191,17 @@ function bindTimeline(){
 const TABS=[['clip','Clipe'],['fx','Efeitos'],['trans','Transições'],['text','Texto'],['caps','Legendas'],['exp','Exportar']];
 function renderTabs(){$('tabs').innerHTML=TABS.map(([k,n])=>`<button role="tab" class="${S.tab===k?'on':''}" data-tab="${k}">${n}</button>`).join('');}
 const rng=(sc,k,label,min,max,step,val,f)=>`<label class="rg"><span>${label}<b data-out="${sc}.${k}">${f?f(val):val}</b></span><input type="range" data-sc="${sc}" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${val}"></label>`;
-const fmtX=v=>(+v).toFixed(2)+'×',fmtP=v=>Math.round(v*100)+'%',fmtN=v=>(+v).toFixed(2);
+const fmtX=v=>(+v).toFixed(2)+'×',fmtP=v=>Math.round(v*100)+'%',fmtN=v=>(+v).toFixed(2),fmtS=v=>(v>0?'+':'')+(+v).toFixed(2)+'s';
 const empty=m=>`<div class="emptyp"><p>${m}</p></div>`;
 function renderPanel(){
   renderTabs();const b=$('panelBody');
   const fn={clip:pClip,fx:pFx,trans:pTrans,text:pText,caps:pCaps,exp:pExp}[S.tab];
   try{b.innerHTML=fn();bindPanel(b);}catch(e){logErr('painel: '+e.message);b.innerHTML=empty('Erro no painel: '+esc(e.message));}
   if(S.tab==='exp')probeExport();
+  if(S.tab==='caps')drawThumbs();
+}
+function drawThumbs(){
+  document.querySelectorAll('canvas[data-style]').forEach(cv=>{try{drawStyleThumb(cv,cv.dataset.style);}catch(e){}});
 }
 function pClip(){
   const c=selClip();if(!c)return empty('Importa um ou mais vídeos para começar a editar.');
@@ -228,20 +249,30 @@ function pCaps(){
    <div class="row3"><input type="number" step="0.1" min="0" data-cap="${s.id}" data-f="start" value="${s.start.toFixed(2)}" aria-label="Início"><input type="number" step="0.1" min="0" data-cap="${s.id}" data-f="end" value="${s.end.toFixed(2)}" aria-label="Fim"><button class="icon" data-capdel="${s.id}" aria-label="Apagar legenda">${ICON.trash}</button></div>
    <textarea rows="2" data-cap="${s.id}" data-f="text">${esc(s.text)}</textarea></div>`).join('');
   const L=[['pt','Português'],['en','Inglês'],['es','Espanhol'],['fr','Francês'],['de','Alemão'],['it','Italiano'],['','Detetar automaticamente']];
-  return `<div class="box"><h3>Legendas automáticas</h3>
+  const styles=Object.entries(CAP_PRESETS).map(([k,p])=>`<button class="stylecard ${cs.preset===k?'on':''}" data-cappreset="${k}" aria-label="${p.n}"><canvas data-style="${k}" width="300" height="130"></canvas><span>${p.n}</span></button>`).join('');
+  const sw=HI_COLORS.map(c=>`<button class="swatch ${cs.hi===c?'on':''}" data-hi="${c}" style="background:${c}" aria-label="Cor ${c}"></button>`).join('');
+  return `<div class="box"><h3>Estilo das legendas</h3>
+  <div class="stylegrid">${styles}</div>
+  <p class="hint">Cor de destaque (palavra a ser dita)</p>
+  <div class="swatches">${sw}<input type="color" data-sc="capStyle" data-k="hi" value="${cs.hi}" aria-label="Cor personalizada"></div>
+  <div class="row2"><label class="fld">Cor do texto<input type="color" data-sc="capStyle" data-k="color" value="${cs.color}"></label>
+  <label class="fld">Fonte<select data-sc="capStyle" data-k="font"><option value="auto" ${cs.font==='auto'?'selected':''}>Automática (do estilo)</option>${FONTS.map(f=>`<option ${cs.font===f?'selected':''}>${f}</option>`).join('')}</select></label></div>
+  ${rng('capStyle','size','Tamanho',30,140,1,cs.size,v=>v)}${rng('capStyle','y','Posição vertical',5,95,1,cs.y,v=>v+'%')}
+  ${rng('capStyle','offset','Sincronia (+ mais cedo, − mais tarde)',-1,1,0.02,cs.offset||0,fmtS)}
+  <label class="chk"><input type="checkbox" data-sc="capStyle" data-k="upper" ${cs.upper?'checked':''}> MAIÚSCULAS</label></div>
+  <div class="box"><h3>Legendas automáticas</h3>
   <label class="fld">Motor<select id="aiEngine"><option value="groq" ${eng==='groq'?'selected':''}>Nuvem Groq (rápido e preciso, recomendado)</option><option value="openai" ${eng==='openai'?'selected':''}>Nuvem OpenAI</option><option value="local" ${eng==='local'?'selected':''}>No aparelho (grátis, mais lento)</option></select></label>
   <label class="fld" id="keyWrap">Chave API <input type="password" id="aiKey" autocomplete="off" placeholder="gsk_… (Groq) ou sk-… (OpenAI)" value="${esc(CFG['key_'+eng]||'')}"></label>
   <p class="hint" id="engHint"></p>
   <div class="row2"><label class="fld">Idioma<select id="aiLang">${L.map(([k,n])=>`<option value="${k}" ${lang===k?'selected':''}>${n}</option>`).join('')}</select></label>
   <label class="fld">Palavras por legenda<input type="number" id="aiMax" min="1" max="10" value="${CFG.max||3}"></label></div>
+  <label class="fld" id="cmWrap">Qualidade (Groq)<select id="aiCM"><option value="whisper-large-v3" ${(CFG.cm||'whisper-large-v3')==='whisper-large-v3'?'selected':''}>Máxima (whisper-large-v3)</option><option value="whisper-large-v3-turbo" ${CFG.cm==='whisper-large-v3-turbo'?'selected':''}>Rápida (large-v3-turbo)</option></select></label>
   <label class="fld" id="modelWrap">Modelo local<select id="aiModel"><option value="Xenova/whisper-tiny">Tiny (rápido, menos preciso)</option><option value="Xenova/whisper-base" selected>Base (equilibrado)</option><option value="Xenova/whisper-small">Small (melhor, lento)</option></select></label>
-  <label class="fld">Nomes/palavras difíceis (opcional)<input type="text" id="aiPrompt" placeholder="ex.: Pinhal Novo, Pladur, FenixCut" value="${esc(CFG.prompt||'')}"></label>
+  <label class="fld">Nomes/palavras difíceis (opcional, ajuda muito)<input type="text" id="aiPrompt" placeholder="ex.: Pinhal Novo, Pladur, FenixCut" value="${esc(CFG.prompt||'')}"></label>
+  <label class="chk" id="fixWrap"><input type="checkbox" id="aiFix" ${CFG.fix===false?'':'checked'}> Corrigir ortografia com IA</label>
   <button class="btn primary wide" data-act="autocap">Gerar legendas automáticas</button>
-  <p class="hint" id="aiStatus"></p></div>
-  <div class="box"><h3>Estilo</h3><div class="chips">${Object.entries(CAP_PRESETS).map(([k,p])=>`<button class="chip ${cs.preset===k?'on':''}" data-cappreset="${k}">${p.n}</button>`).join('')}</div>
-  ${rng('capStyle','size','Tamanho',30,140,1,cs.size,v=>v)}${rng('capStyle','y','Posição vertical',5,95,1,cs.y,v=>v+'%')}
-  <div class="row2"><label class="fld">Fonte<select data-sc="capStyle" data-k="font">${FONTS.map(f=>`<option ${cs.font===f?'selected':''}>${f}</option>`).join('')}</select></label>
-  <label class="chk"><input type="checkbox" data-sc="capStyle" data-k="upper" ${cs.upper?'checked':''}> MAIÚSCULAS</label></div></div>
+  <p class="hint" id="aiStatus"></p>
+  <button class="btn wide" data-act="cfglink">Copiar link para configurar outro aparelho</button></div>
   <div class="btnrow"><button class="btn" data-act="addcap">${ICON.plus} Legenda aqui</button><button class="btn" data-act="capm">−0,1s todas</button><button class="btn" data-act="capp">+0,1s todas</button></div>
   <div class="btnrow"><label class="btn">Importar .srt<input type="file" id="srtIn" accept=".srt,text/plain" hidden></label><button class="btn" data-act="srtout">Exportar .srt</button><button class="btn danger" data-act="clearcaps">Limpar</button></div>
   <p class="hint">Corrige o texto e os tempos abaixo. Gera as legendas depois de acabares de cortar e mudar velocidades, porque os tempos seguem a timeline.</p>
@@ -291,12 +322,19 @@ async function doExport(){
   finally{EXP.busy=false;S.exporting=false;if($('expGo')){$('expGo').hidden=false;$('expCancel').hidden=true;}S.clips.forEach(c=>SRC[c.src].video.pause());setT(S.t);}
 }
 function download(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();}
-async function copyDiag(){
+async function copyText(txt,ok){
+  try{await navigator.clipboard.writeText(txt);toast(ok);}
+  catch(e){const t=document.createElement('textarea');t.value=txt;document.body.appendChild(t);t.select();try{document.execCommand('copy');toast(ok);}catch(_){toast('Não consegui copiar.');}t.remove();}
+}
+function copyDiag(){
   const d={ua:navigator.userAgent,webcodecs:hasWC(),audioEncoder:'AudioEncoder' in window,mediaRecorder:!!window.MediaRecorder,isolated:window.crossOriginIsolated,
     ratio:S.ratio.join(':'),clips:S.clips.map(c=>({n:c.name,dur:+c.dur.toFixed(1),speed:c.speed,w:SRC[c.src].vw,h:SRC[c.src].vh,type:SRC[c.src].file.type})),caps:S.caps.length,texts:S.texts.length,exp:{res:EXP.res,fps:EXP.fps,sup:EXP.support},erros:LOG};
-  const txt=JSON.stringify(d,null,1);
-  try{await navigator.clipboard.writeText(txt);toast('Diagnóstico copiado. Cola-o na conversa.');}
-  catch(e){const t=document.createElement('textarea');t.value=txt;document.body.appendChild(t);t.select();try{document.execCommand('copy');toast('Diagnóstico copiado.');}catch(_){toast('Não consegui copiar.');}t.remove();}
+  copyText(JSON.stringify(d,null,1),'Diagnóstico copiado. Cola-o na conversa.');
+}
+function copyCfgLink(){
+  const o={engine:CFG.engine,lang:CFG.lang,max:CFG.max,prompt:CFG.prompt,fix:CFG.fix,cm:CFG.cm,key_groq:CFG.key_groq,key_openai:CFG.key_openai};
+  const link=location.origin+location.pathname+'#cfg='+encodeURIComponent(b64enc(o));
+  copyText(link,'Link copiado. Abre-o no outro aparelho (contém a tua chave: não partilhes).');
 }
 
 function target(sc){
@@ -315,16 +353,17 @@ function bindPanel(root){
       }
       o[k]=v;
       const out=root.querySelector(`[data-out="${el.dataset.sc}.${k}"]`);
-      if(out){const f=({speed:fmtX,vol:fmtP,kb:fmtP,dur:x=>(+x).toFixed(2)+'s',y:x=>x+'%'}[k])||(el.dataset.sc==='fx'?fmtN:null);out.textContent=f?f(v):v;}
+      if(out){const f=({speed:fmtX,vol:fmtP,kb:fmtP,offset:fmtS,dur:x=>(+x).toFixed(2)+'s',y:x=>x+'%'}[k])||(el.dataset.sc==='fx'?fmtN:null);out.textContent=f?f(v):v;}
       if(el.dataset.sc==='fx')o.preset='custom';
       layout();renderTimeline();invalidate();
     };
     el.addEventListener('input',upd);
-    el.addEventListener('change',()=>{upd();commit();if(el.dataset.sc==='fx')renderPanel();});
+    el.addEventListener('change',()=>{upd();commit();if(el.dataset.sc==='fx')renderPanel();else if(el.dataset.sc==='capStyle'&&['hi','color','font','upper','size'].includes(el.dataset.k))drawThumbs();});
   });
   root.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{const c=selClip();if(!c)return;Object.assign(c.fx,FX_DEFAULT,PRESETS[b.dataset.preset].v,{preset:b.dataset.preset});commit();renderPanel();invalidate();});
   root.querySelectorAll('[data-trans]').forEach(b=>b.onclick=()=>{const c=selClip();if(!c)return;c.trans.type=b.dataset.trans;commit();renderPanel();if(b.dataset.trans!=='none'){setT(c.tStart+0.05);}});
-  root.querySelectorAll('[data-cappreset]').forEach(b=>b.onclick=()=>{S.capStyle.preset=b.dataset.cappreset;commit();renderPanel();invalidate();});
+  root.querySelectorAll('[data-cappreset]').forEach(b=>b.onclick=()=>{S.capStyle.preset=b.dataset.cappreset;commit();root.querySelectorAll('.stylecard').forEach(x=>x.classList.toggle('on',x===b));invalidate();});
+  root.querySelectorAll('[data-hi]').forEach(b=>b.onclick=()=>{S.capStyle.hi=b.dataset.hi;commit();root.querySelectorAll('.swatch').forEach(x=>x.classList.toggle('on',x===b));drawThumbs();invalidate();});
   root.querySelectorAll('[data-capdel]').forEach(b=>b.onclick=()=>{S.caps=S.caps.filter(x=>x.id!==b.dataset.capdel);commit();refreshAll();});
   root.querySelectorAll('.cap-row').forEach(r=>{
     r.addEventListener('focusin',()=>{const s=S.caps.find(x=>x.id===r.dataset.cap);if(s){S.sel={type:'cap',id:s.id};if(!S.playing)setT(s.start+0.01);renderTimeline();}});
@@ -337,13 +376,15 @@ function bindPanel(root){
   root.querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>act(b.dataset.act));
   const sin=$('srtIn');if(sin)sin.onchange=async e=>{const f=e.target.files[0];if(!f)return;const arr=parseSRT(await f.text());if(!arr.length)return toast('SRT inválido.');S.caps=arr;commit();refreshAll();};
   const eng=$('aiEngine');if(eng){
-    const sync=()=>{const e=eng.value;$('keyWrap').hidden=e==='local';$('modelWrap').hidden=e!=='local';$('aiKey').value=CFG['key_'+e]||'';
+    const sync=()=>{const e=eng.value;$('keyWrap').hidden=e==='local';$('modelWrap').hidden=e!=='local';$('cmWrap').hidden=e!=='groq';$('fixWrap').hidden=e==='local';$('aiKey').value=CFG['key_'+e]||'';
       $('engHint').innerHTML=e==='groq'?'Chave grátis em <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>. Só o áudio é enviado, não o vídeo. Fica guardada neste aparelho.':e==='openai'?'Chave em <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a> (pago por minuto). Só o áudio é enviado.':'Corre no teu aparelho, sem enviar nada. O modelo descarrega-se uma vez. É mais lento e menos preciso que a nuvem.';};
     eng.onchange=()=>{CFG.engine=eng.value;saveCFG();sync();};sync();
     $('aiKey').onchange=e=>{CFG['key_'+eng.value]=e.target.value.trim();saveCFG();};
     $('aiLang').onchange=e=>{CFG.lang=e.target.value;saveCFG();};
     $('aiMax').onchange=e=>{CFG.max=+e.target.value;saveCFG();};
     $('aiPrompt').onchange=e=>{CFG.prompt=e.target.value;saveCFG();};
+    $('aiCM').onchange=e=>{CFG.cm=e.target.value;saveCFG();};
+    $('aiFix').onchange=e=>{CFG.fix=e.target.checked;saveCFG();};
     if(CFG.model)$('aiModel').value=CFG.model;$('aiModel').onchange=e=>{CFG.model=e.target.value;saveCFG();};
   }
   const g=$('expGo');if(g){
@@ -363,12 +404,13 @@ async function act(a){
   else if(a==='clearcaps'){S.caps=[];commit();refreshAll();}
   else if(a==='srtout'){if(!S.caps.length)return toast('Sem legendas.');download('legendas.srt',toSRT(),'text/plain');}
   else if(a==='diag'){copyDiag();return;}
+  else if(a==='cfglink'){copyCfgLink();return;}
   else if(a==='autocap'){
     if(!S.clips.length)return toast('Importa um vídeo primeiro.');
     const st=m=>{const e=$('aiStatus');if(e)e.textContent=m;};
     const engine=$('aiEngine').value;
     try{
-      const segs=await autoCaptions({engine,key:($('aiKey').value||'').trim(),lang:$('aiLang').value,model:$('aiModel').value,maxWords:Math.max(1,+$('aiMax').value||3),prompt:$('aiPrompt').value.trim()},st);
+      const segs=await autoCaptions({engine,key:($('aiKey').value||'').trim(),cloudModel:$('aiCM').value,fix:$('aiFix').checked,lang:$('aiLang').value,model:$('aiModel').value,maxWords:Math.max(1,+$('aiMax').value||3),prompt:$('aiPrompt').value.trim()},st);
       S.caps=segs;commit();refreshAll();toast(`${segs.length} legendas geradas. Corrige o que for preciso.`);
     }catch(e){console.error(e);logErr('legendas: '+e.message);st('Erro: '+e.message);toast('Falhou: '+e.message,6000);}
     return;
@@ -388,8 +430,9 @@ function init(){
   $('tabs').onclick=e=>{const b=e.target.closest('[data-tab]');if(b){S.tab=b.dataset.tab;renderPanel();}};
   $('btnExport').onclick=()=>{S.tab='exp';renderPanel();$('panelBody').scrollTop=0;};
   document.addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;if(e.code==='Space'){e.preventDefault();S.playing?pause():play();}else if(e.key==='s')splitAt();else if(e.key==='Delete'||e.key==='Backspace')deleteSel();else if((e.ctrlKey||e.metaKey)&&e.key==='z')undo();});
-  if(document.fonts){FONTS.forEach(f=>document.fonts.load(`700 40px "${f}"`).then(invalidate).catch(()=>{}));document.fonts.ready.then(invalidate);}
+  if(document.fonts){FONTS.forEach(f=>document.fonts.load(`700 40px "${f}"`).then(()=>{invalidate();if(S.tab==='caps')drawThumbs();}).catch(()=>{}));document.fonts.ready.then(()=>{invalidate();if(S.tab==='caps')drawThumbs();});}
   commit();layout();renderTimeline();renderPanel();requestAnimationFrame(tick);
+  if(_cfgImported){S.tab='caps';renderPanel();toast('Configuração importada ✓ (chave e preferências guardadas)',5000);}
   if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
 window.addEventListener('DOMContentLoaded',init);

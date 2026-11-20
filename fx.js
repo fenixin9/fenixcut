@@ -148,17 +148,23 @@ function drawRich(ctx,W,H,tokens,o){
   ctx.globalAlpha=o.alpha==null?1:o.alpha;
   ctx.translate(W/2,cy+(o.dy||0)*px);const sc=o.scale||1;ctx.scale(sc,sc);ctx.translate(-W/2,-cy);
   const padX=px*0.45,padY=px*0.2;
-  if(o.bg){const bw=Math.max(...lines.map(l=>l.w))+padX*2;ctx.fillStyle='rgba(0,0,0,0.62)';roundRect(ctx,W/2-bw/2,cy-bh/2-padY,bw,bh+padY*2,px*0.3);ctx.fill();}
+  if(o.bg){const bw=Math.max(...lines.map(l=>l.w))+padX*2;ctx.fillStyle=typeof o.bg==='string'?o.bg:'rgba(0,0,0,0.62)';roundRect(ctx,W/2-bw/2,cy-bh/2-padY,bw,bh+padY*2,px*0.3);ctx.fill();}
   let y=cy-bh/2+lh/2;
+  const sw=px*0.16*(o.stroke===true?1:(o.stroke||0));
   for(const l of lines){
     let x=W/2-l.w/2;
     for(const k of l.tk){
       ctx.save();
       if(k.sc&&k.sc!==1){ctx.translate(x+k._w/2,y);ctx.scale(k.sc,k.sc);ctx.translate(-(x+k._w/2),-y);}
       if(k.bg){ctx.fillStyle=k.bg;roundRect(ctx,x-px*0.2,y-lh*0.46,k._w+px*0.4,lh*0.92,px*0.28);ctx.fill();}
-      if(o.stroke){ctx.lineWidth=px*0.16;ctx.strokeStyle='#000';ctx.lineJoin='round';ctx.strokeText(k.t,x,y);}
-      if(o.shadow){ctx.shadowColor='rgba(0,0,0,0.75)';ctx.shadowBlur=px*0.22;ctx.shadowOffsetY=px*0.04;}
+      if(o.offset3d){ctx.fillStyle='#000';ctx.fillText(k.t,x+px*0.06,y+px*0.08);}
+      if(sw>0){ctx.lineWidth=sw;ctx.strokeStyle='#000';ctx.lineJoin='round';ctx.strokeText(k.t,x,y);}
+      if(o.glow){ctx.shadowColor=k.c||o.glow;ctx.shadowBlur=px*0.5;}
+      else if(o.shadow){ctx.shadowColor='rgba(0,0,0,0.75)';ctx.shadowBlur=px*0.22;ctx.shadowOffsetY=px*0.04;}
       ctx.fillStyle=k.c||o.color;ctx.fillText(k.t,x,y);
+      if(o.glow){ctx.fillText(k.t,x,y);}
+      ctx.shadowBlur=0;ctx.shadowOffsetY=0;
+      if(k.ul){ctx.fillStyle=k.ul;ctx.fillRect(x,y+px*0.48,k._w,Math.max(2,px*0.09));}
       ctx.restore();
       x+=k._w+sp;
     }
@@ -172,14 +178,49 @@ function segWords(seg){
   const tot=ws.reduce((a,w)=>a+w.length+2,0);let t=seg.start;const d=seg.end-seg.start;
   return ws.map(w=>{const e=t+d*(w.length+2)/tot;const o={w,s:t,e};t=e;return o;});
 }
+const HI_COLORS=['#ffd23f','#3ddc84','#ff4d6d','#4dabff','#ff8a1f','#c77dff','#22e6d4','#ffffff'];
 const CAP_PRESETS={
-  pop:{n:'Pop (estilo CapCut)',bg:false,stroke:true,shadow:false,color:'#ffffff',bold:true,hi:'#ffd23f',upper:true,pop:true},
-  pill:{n:'Pílula',bg:false,stroke:false,shadow:false,color:'#ffffff',bold:true,hi:'#111111',pill:'#ffd23f',upper:false,pop:true},
-  karaoke:{n:'Karaoke',bg:false,stroke:true,shadow:false,color:'#ffffff',bold:true,hi:'#ffd23f',upper:true},
-  classic:{n:'Clássico',bg:true,stroke:false,shadow:false,color:'#ffffff',bold:true,hi:null},
-  bold:{n:'Destaque',bg:false,stroke:true,shadow:false,color:'#ffd23f',bold:true,hi:null,upper:true},
-  minimal:{n:'Minimalista',bg:false,stroke:false,shadow:true,color:'#ffffff',bold:false,hi:null}
+  pop:{n:'Pop',upper:1,stroke:1,hiMode:'color',pop:1,font:'Montserrat'},
+  impact:{n:'Impacto',upper:1,stroke:2,hiMode:'color',pop:1,font:'Anton'},
+  pill:{n:'Pílula',hiMode:'pill',pop:1,font:'Montserrat'},
+  wordbox:{n:'Caixas',wordBox:1,hiMode:'pill',font:'Montserrat'},
+  karaoke:{n:'Karaoke',upper:1,stroke:1,hiMode:'color',font:'Montserrat'},
+  single:{n:'Uma palavra',single:1,upper:1,stroke:2,hiMode:'color',pop:1,font:'Anton'},
+  reveal:{n:'Aparece a falar',reveal:1,upper:1,stroke:1,hiMode:'color',font:'Montserrat'},
+  neon:{n:'Néon',glow:1,upper:1,hiMode:'color',font:'Montserrat'},
+  under:{n:'Sublinhado',hiMode:'underline',shadow:1,font:'Montserrat'},
+  fill:{n:'Fundo de cor',bgHi:1,hiMode:'none',font:'Montserrat'},
+  bold:{n:'Cor total',upper:1,stroke:1,hiMode:'none',colorHi:1,font:'Bebas Neue'},
+  comic:{n:'Cómico',upper:1,stroke:2,hiMode:'none',colorHi:1,retro:1,font:'Bangers'},
+  classic:{n:'Clássico',boxBg:1,hiMode:'none',font:'Montserrat'},
+  minimal:{n:'Minimalista',shadow:1,hiMode:'none',font:'Satoshi',plain:1}
 };
+function buildCaption(ws,t,cs){
+  const pr=CAP_PRESETS[cs.preset]||CAP_PRESETS.pop,hi=cs.hi||'#ffd23f',base=cs.color||'#ffffff';
+  let ai=-1;
+  for(let i=0;i<ws.length;i++){if(t>=ws[i].s&&t<ws[i].e){ai=i;break;}}
+  if(ai<0)for(let i=0;i<ws.length;i++)if(ws[i].s<=t)ai=i;
+  let list=ws.map((w,i)=>({w,i}));
+  const cur=Math.max(0,ai);
+  if(pr.single)list=list.filter(x=>x.i===cur);
+  else if(pr.reveal)list=list.filter(x=>x.i<=cur);
+  const dark=pr.bgHi;
+  const tokens=list.map(({w,i})=>{
+    const act=i===ai;
+    const tk={t:(pr.upper||cs.upper)?w.w.toUpperCase():w.w,c:dark?'#111111':(pr.colorHi?hi:base),sc:1};
+    if(pr.wordBox)tk.bg='rgba(0,0,0,0.62)';
+    if(act){
+      if(pr.hiMode==='color')tk.c=hi;
+      else if(pr.hiMode==='pill'){tk.bg=hi;tk.c='#111111';}
+      else if(pr.hiMode==='underline')tk.ul=hi;
+      if(pr.pop)tk.sc=1.12;
+    }
+    return tk;
+  });
+  const opts={px:cs.size*(pr.single?1.35:1),font:(cs.font&&cs.font!=='auto')?cs.font:pr.font,bold:!pr.plain,color:base,stroke:pr.stroke||0,shadow:!!pr.shadow,glow:pr.glow?hi:null,
+    bg:pr.boxBg?'rgba(0,0,0,0.62)':(pr.bgHi?hi:null),y:cs.y,maxLines:pr.single?1:2,maxW:0.82,offset3d:!!pr.retro};
+  return{tokens,opts};
+}
 function drawOverlays(ctx,W,H,t){
   for(const x of S.texts){
     const l=t-x.start;if(l<0||l>=x.dur)continue;
@@ -189,16 +230,16 @@ function drawOverlays(ctx,W,H,t){
     else if(x.anim==='slide'){dy=(1-ease(l/0.35))*1.2;alpha=Math.min(1,l/0.2);}
     else if(x.anim==='type'){txt=x.text.slice(0,Math.floor(x.text.length*Math.min(1,l/Math.max(0.3,Math.min(x.dur*0.6,2)))));}
     const tk=[];txt.split('\n').forEach((ln,i)=>{if(i)tk.push({t:'\n'});ln.split(/\s+/).filter(Boolean).forEach(w=>tk.push({t:w}));});
-    drawRich(ctx,W,H,tk,{px:x.size,font:x.font,bold:x.bold,color:x.color,bg:x.bg,stroke:x.stroke,shadow:!x.bg&&!x.stroke,y:x.y,alpha,scale,dy});
+    drawRich(ctx,W,H,tk,{px:x.size,font:x.font,bold:x.bold,color:x.color,bg:x.bg,stroke:x.stroke?1:0,shadow:!x.bg&&!x.stroke,y:x.y,alpha,scale,dy});
   }
-  const seg=S.caps.find(s=>t>=s.start&&t<s.end);
-  if(seg){
-    const cs=S.capStyle,pr=CAP_PRESETS[cs.preset]||CAP_PRESETS.pop;
-    const ws=segWords(seg);
-    const tk=ws.map(w=>{
-      const act=t>=w.s&&t<w.e;
-      return{t:(pr.upper||cs.upper)?w.w.toUpperCase():w.w,c:act&&pr.hi?pr.hi:null,bg:act&&pr.pill?pr.pill:null,sc:act&&pr.pop?1.12:1};
-    });
-    drawRich(ctx,W,H,tk,{px:cs.size,font:cs.font,bold:pr.bold,color:pr.color,bg:pr.bg,stroke:pr.stroke,shadow:pr.shadow,y:cs.y,maxLines:2,maxW:0.82});
-  }
+  const cs=S.capStyle,tt=t+(cs.offset||0);
+  const seg=S.caps.find(s=>tt>=s.start&&tt<s.end);
+  if(seg){const b=buildCaption(segWords(seg),tt,cs);drawRich(ctx,W,H,b.tokens,b.opts);}
+}
+function drawStyleThumb(cv,key){
+  const W=cv.width,H=cv.height,ctx=cv.getContext('2d');
+  const g=ctx.createLinearGradient(0,0,W,H);g.addColorStop(0,'#3a4a5a');g.addColorStop(1,'#1b222b');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  const ws=[{w:'Isto',s:0,e:1},{w:'é',s:1,e:2},{w:'um',s:2,e:3},{w:'teste',s:3,e:4}];
+  const cs=Object.assign({},S.capStyle,{preset:key,y:50,size:Math.min(S.capStyle.size,80)});
+  const b=buildCaption(ws,1.5,cs);b.opts.maxW=0.92;drawRich(ctx,W,H,b.tokens,b.opts);
 }

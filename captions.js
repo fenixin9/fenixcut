@@ -3,8 +3,8 @@
 let ASRW=null;
 const LANG_NAMES={pt:'portuguese',en:'english',es:'spanish',fr:'french',de:'german',it:'italian','':''};
 const CLOUD={
-  groq:{url:'https://api.groq.com/openai/v1/audio/transcriptions',model:'whisper-large-v3-turbo',label:'Groq'},
-  openai:{url:'https://api.openai.com/v1/audio/transcriptions',model:'whisper-1',label:'OpenAI'}
+  groq:{url:'https://api.groq.com/openai/v1/audio/transcriptions',chat:'https://api.groq.com/openai/v1/chat/completions',chatModel:'llama-3.3-70b-versatile',label:'Groq'},
+  openai:{url:'https://api.openai.com/v1/audio/transcriptions',chat:'https://api.openai.com/v1/chat/completions',chatModel:'gpt-4o-mini',label:'OpenAI'}
 };
 function encodeWav(f32,sr){
   const n=f32.length,buf=new ArrayBuffer(44+n*2),v=new DataView(buf);
@@ -16,13 +16,14 @@ function encodeWav(f32,sr){
 }
 async function cloudASR(audio,o,status){
   const P=CLOUD[o.engine];if(!o.key)throw new Error('Cola a chave API da '+P.label+'.');
+  const model=o.engine==='openai'?'whisper-1':(o.cloudModel||'whisper-large-v3');
   const sr=16000,CH=600*sr,words=[];
   for(let off=0,i=0;off<audio.length;off+=CH,i++){
     status(`A enviar áudio para ${P.label} (parte ${i+1}/${Math.ceil(audio.length/CH)})…`);
     const wav=encodeWav(audio.subarray(off,off+CH),sr);
     const fd=new FormData();
     fd.append('file',new File([wav],'audio.wav',{type:'audio/wav'}));
-    fd.append('model',P.model);fd.append('response_format','verbose_json');
+    fd.append('model',model);fd.append('response_format','verbose_json');
     fd.append('timestamp_granularities[]','word');fd.append('timestamp_granularities[]','segment');
     fd.append('temperature','0');
     if(o.lang)fd.append('language',o.lang);
@@ -32,8 +33,10 @@ async function cloudASR(audio,o,status){
     catch(e){throw new Error('Sem ligação ao serviço '+P.label+' (rede ou bloqueio do navegador).');}
     if(!r.ok){const tx=(await r.text()).slice(0,200);throw new Error(r.status===401?'Chave API inválida.':`Erro ${r.status}: ${tx}`);}
     const j=await r.json(),base=off/sr;
-    if(j.words&&j.words.length)j.words.forEach(w=>{const t=String(w.word).trim();if(t)words.push({w:t,s:w.start+base,e:w.end+base});});
-    else if(j.segments)j.segments.forEach(sg=>{const ws=String(sg.text).trim().split(/\s+/).filter(Boolean);const d=(sg.end-sg.start)/Math.max(1,ws.length);ws.forEach((w,k)=>words.push({w,s:sg.start+base+k*d,e:sg.start+base+(k+1)*d}));});
+    const bad=(j.segments||[]).filter(s=>(s.no_speech_prob>0.6&&s.avg_logprob<-0.7)||s.compression_ratio>2.4);
+    const isBad=t=>bad.some(s=>t>=s.start-0.05&&t<=s.end+0.05);
+    if(j.words&&j.words.length)j.words.forEach(w=>{const t=String(w.word).trim();if(t&&!isBad(w.start))words.push({w:t,s:w.start+base,e:w.end+base});});
+    else if(j.segments)j.segments.filter(s=>!bad.includes(s)).forEach(sg=>{const ws=String(sg.text).trim().split(/\s+/).filter(Boolean);const d=(sg.end-sg.start)/Math.max(1,ws.length);ws.forEach((w,k)=>words.push({w,s:sg.start+base+k*d,e:sg.start+base+(k+1)*d}));});
   }
   return words;
 }
@@ -78,6 +81,25 @@ function groupWords(words,o){
   }
   return segs;
 }
+async function aiFix(segs,o,status){
+  const P=CLOUD[o.engine];let fixed=0;
+  for(let i=0;i<segs.length;i+=40){
+    status(`A corrigir ortografia com IA… ${Math.min(segs.length,i+40)}/${segs.length}`);
+    const part=segs.slice(i,i+40);
+    const sys='És revisor de legendas em português europeu. Corrige erros de reconhecimento de fala (palavras mal ouvidas, acentos, nomes próprios) usando o contexto da lista completa. REGRA CRÍTICA: cada legenda tem de manter EXATAMENTE o mesmo número de palavras (separadas por espaços); não juntes, não dividas, não acrescentes nem removas palavras. Mantém a pontuação existente. '+(o.prompt?('Vocabulário esperado: '+o.prompt+'. '):'')+'Responde só com JSON: {"t":["legenda 1","legenda 2",...]} com o mesmo número de itens.';
+    try{
+      const r=await fetch(P.chat,{method:'POST',headers:{Authorization:'Bearer '+o.key,'Content-Type':'application/json'},body:JSON.stringify({model:P.chatModel,temperature:0,response_format:{type:'json_object'},messages:[{role:'system',content:sys},{role:'user',content:JSON.stringify(part.map(s=>s.text))}]})});
+      if(!r.ok)throw new Error('chat '+r.status);
+      const j=await r.json(),arr=JSON.parse(j.choices[0].message.content).t;
+      if(!Array.isArray(arr)||arr.length!==part.length)throw new Error('formato');
+      part.forEach((s,k)=>{
+        const nt=String(arr[k]||'').trim(),nw=nt.split(/\s+/).filter(Boolean),ow=s.words;
+        if(nw.length===ow.length&&nt!==s.text){s.words=ow.map((w,m)=>({w:nw[m],s:w.s,e:w.e}));s.text=nw.join(' ');s.wt=s.text;fixed++;}
+      });
+    }catch(e){logErr('correção IA: '+e.message);}
+  }
+  return fixed;
+}
 async function autoCaptions(o,status){
   status('A preparar o áudio…');
   const ab=await mixAudio(16000,1);
@@ -85,7 +107,9 @@ async function autoCaptions(o,status){
   const audio=ab.getChannelData(0);
   const words=o.engine==='local'?await localASR(audio,o,status):await cloudASR(audio,o,status);
   if(!words.length)throw new Error('Não foi detetada fala.');
-  return groupWords(words,o);
+  const segs=groupWords(words,o);
+  if(o.engine!=='local'&&o.fix){const n=await aiFix(segs,o,status);status(`Pronto. ${n} legendas corrigidas pela IA.`);}
+  return segs;
 }
 const pad=(n,l=2)=>String(n).padStart(l,'0');
 function srtTime(t){t=Math.max(0,t);const ms=Math.round(t*1000);return `${pad(Math.floor(ms/3600000))}:${pad(Math.floor(ms/60000)%60)}:${pad(Math.floor(ms/1000)%60)},${pad(ms%1000,3)}`;}

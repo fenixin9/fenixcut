@@ -14,7 +14,7 @@ a{color:var(--ac)}
 select,input[type=number],input[type=text],input[type=password],textarea{background:var(--s2);border:1px solid var(--bd);border-radius:var(--r1);padding:8px;font-size:16px;width:100%}
 .topr select{width:auto;font-size:14px}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:0 14px;border-radius:var(--r1);background:var(--s3);font-size:14px;font-weight:500;border:1px solid var(--bd);text-decoration:none;color:var(--tx)}
-.btn:active,.chip:active,.icon:active{transform:scale(.97);filter:brightness(1.2)}
+.btn:active,.chip:active,.icon:active,.stylecard:active{transform:scale(.97);filter:brightness(1.2)}
 .btn.primary{background:var(--ac);color:var(--acx);border-color:transparent;font-weight:700}
 .btn.danger{color:var(--er)}.btn.wide{width:100%;margin-top:8px}
 .icon{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:var(--r1);color:var(--tx)}
@@ -48,6 +48,14 @@ select,input[type=number],input[type=text],input[type=password],textarea{backgro
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
 .chip{min-height:40px;padding:0 12px;border-radius:999px;background:var(--s2);border:1px solid var(--bd);font-size:14px}
 .chip.on{background:var(--ac);color:var(--acx);border-color:transparent;font-weight:700}
+.stylegrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.stylecard{display:flex;flex-direction:column;gap:4px;padding:4px;border-radius:var(--r2);background:var(--s2);border:2px solid transparent;text-align:center;font-size:12px;color:var(--mu)}
+.stylecard canvas{width:100%;height:auto;border-radius:var(--r1);display:block}
+.stylecard.on{border-color:var(--ac);color:var(--tx)}
+.swatches{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+.swatch{width:36px;height:36px;border-radius:50%;border:2px solid rgba(255,255,255,.25)}
+.swatch.on{outline:3px solid var(--tx);outline-offset:2px}
+.swatches input[type=color]{width:44px;height:36px;padding:0}
 .rg{display:block;margin-bottom:12px}.rg span{display:flex;justify-content:space-between;font-size:13px;color:var(--mu);margin-bottom:2px}.rg b{color:var(--tx);font-weight:500;font-variant-numeric:tabular-nums}
 input[type=range]{width:100%;accent-color:var(--ac);height:28px}
 .fld{display:block;font-size:13px;color:var(--mu);margin-bottom:12px}.fld input,.fld select,.fld textarea{margin-top:4px;color:var(--tx)}
