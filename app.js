@@ -1,16 +1,20 @@
 
 'use strict';
 const $=id=>document.getElementById(id);
-const S={ratio:[9,16],fit:'cover',clips:[],texts:[],caps:[],capStyle:{preset:'pop',size:70,y:72,font:'auto',upper:false,hi:'#ffd23f',color:'#ffffff',offset:0},t:0,total:0,playing:false,sel:null,tab:'clip',pps:60,exporting:false};
+const S={ratio:[9,16],fit:'cover',clips:[],texts:[],caps:[],
+  capStyle:{preset:'pop',size:70,y:72,font:'auto',upper:false,hi:'#ffd23f',color:'#ffffff',offset:0,bgc:'#000000',pal:['#ffffff','#f6e05e','#e8ddc0','#ff6b6b','#111111'],palMode:'multi',one:'#f6e05e',ransomHi:false},
+  t:0,total:0,playing:false,sel:null,tab:'clip',pps:60,exporting:false,aiLog:null};
 const SRC={};let uid=1;const nid=()=>'i'+(uid++);
 const FONTS=['Montserrat','Anton','Bebas Neue','Bangers','Pacifico','Satoshi'];
+const ALL_FONTS=[...new Set([...FONTS,...PAPER_FONTS])];
 const ICON={
  play:'<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>',
  pause:'<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',
  split:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/></svg>',
  trash:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
  undo:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>',
- plus:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>'
+ plus:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+ expand:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 14 5-5 5 5"/></svg>'
 };
 const fmt=t=>{t=Math.max(0,t);const m=Math.floor(t/60),s=t-m*60;return `${m}:${s.toFixed(1).padStart(4,'0')}`;};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -38,17 +42,18 @@ function srcTimeAt(c,t){return Math.min(c.out-0.001,c.in+(t-c.tStart)*c.speed);}
 const hist=[];let hi=-1;
 const snap=()=>JSON.stringify({clips:S.clips,texts:S.texts,caps:S.caps,capStyle:S.capStyle,ratio:S.ratio,fit:S.fit});
 function commit(){const s=snap();if(hist[hi]===s)return;hist.length=hi+1;hist.push(s);hi=hist.length-1;if(hist.length>60){hist.shift();hi--;}}
-function undo(){if(hi<=0)return;hi--;const o=JSON.parse(hist[hi]);Object.assign(S,{clips:o.clips,texts:o.texts,caps:o.caps,capStyle:o.capStyle,ratio:o.ratio,fit:o.fit});S.sel=null;$('ratio').value=S.ratio.join(':');initRenderer();refreshAll(true);}
+function undo(){if(hi<=0)return toast('Nada para desfazer.');hi--;const o=JSON.parse(hist[hi]);Object.assign(S,{clips:o.clips,texts:o.texts,caps:o.caps,capStyle:o.capStyle,ratio:o.ratio,fit:o.fit});S.sel=null;$('ratio').value=S.ratio.join(':');initRenderer();refreshAll(true);}
 function selClip(){if(S.sel&&S.sel.type==='clip'){const c=S.clips.find(x=>x.id===S.sel.id);if(c)return c;}return clipAt(S.t)||S.clips[0]||null;}
 const selText=()=>S.sel&&S.sel.type==='text'?S.texts.find(x=>x.id===S.sel.id):null;
 
 /* ---------- renderer / preview ---------- */
-let R=null,dirty=true;
-const invalidate=()=>{dirty=true;};
+let R=null,dirty=true,thumbDirty=true;
+const invalidate=()=>{dirty=true;thumbDirty=true;};
 function initRenderer(){
   if(R)R.dispose();
   const[w,h]=dimsFor(480);const cv=$('preview');
   R=createRenderer(w,h,cv);cv.style.aspectRatio=`${w}/${h}`;invalidate();
+  if(TRr){TRr.dispose();TRr=null;}
 }
 function renderScene(r,t,ovr){
   const c=ovr?ovr.clip:clipAt(t);
@@ -100,6 +105,53 @@ function setT(t){
   invalidate();
 }
 function setPlayIcon(){$('btnPlay').innerHTML=S.playing?ICON.pause:ICON.play;}
+
+/* ---------- miniaturas (efeitos, transições, textos) ---------- */
+let TRr=null,SNAP=null,lastTh=0,lastAnim=0,lastSnap=0;
+function thumbDims(){const[w,h]=dimsFor(110);return[w,h];}
+function ensureTR(){const[tw,th]=thumbDims();if(!TRr||TRr.w!==tw||TRr.h!==th){if(TRr)TRr.dispose();TRr=createRenderer(tw,th);}}
+function snapFrame(){
+  const c=selClip();if(!c)return null;const v=SRC[c.src].video;if(v.readyState<2||!v.videoWidth)return null;
+  const w=240,h=Math.max(2,Math.round(240*v.videoHeight/v.videoWidth));
+  if(!SNAP||SNAP.width!==w||SNAP.height!==h){SNAP=document.createElement('canvas');SNAP.width=w;SNAP.height=h;}
+  try{SNAP.getContext('2d').drawImage(v,0,0,w,h);}catch(e){return null;}
+  return{img:SNAP,vw:w,vh:h,clip:c};
+}
+function sizeThumbs(sel){const[tw,th]=thumbDims();document.querySelectorAll(sel).forEach(cv=>{if(cv.width!==tw||cv.height!==th){cv.width=tw;cv.height=th;}});}
+function placeholder(cv){const ctx=thumbBG(cv);ctx.fillStyle='rgba(255,255,255,.35)';ctx.font=`${Math.round(cv.height/9)}px sans-serif`;ctx.textAlign='center';ctx.fillText('sem vídeo',cv.width/2,cv.height/2);}
+function drawFxThumbs(){
+  const cvs=document.querySelectorAll('canvas[data-fx]');if(!cvs.length)return;
+  sizeThumbs('canvas[data-fx]');
+  const sf=snapFrame();if(!sf){cvs.forEach(placeholder);return;}
+  ensureTR();const asp=TRr.w/TRr.h;
+  cvs.forEach(cv=>{
+    const p=PRESETS[cv.dataset.fx];if(!p)return;
+    const fake={fx:Object.assign({},FX_DEFAULT,p.v),trans:{type:'none',dur:0.5},kb:0,dur:1};
+    TRr.draw(sf.img,sceneParams(fake,0.5,asp,{vw:sf.vw,vh:sf.vh}));
+    cv.getContext('2d').drawImage(TRr.out,0,0);
+  });
+}
+function drawTransThumbs(now){
+  const cvs=document.querySelectorAll('canvas[data-tr]');if(!cvs.length)return;
+  sizeThumbs('canvas[data-tr]');
+  if(now-lastSnap>500||!SNAP){lastSnap=now;snapFrame();}
+  const sf=SNAP&&selClip()?{img:SNAP,vw:SNAP.width,vh:SNAP.height}:null;if(!sf){cvs.forEach(placeholder);return;}
+  ensureTR();const asp=TRr.w/TRr.h,c=selClip();
+  const cyc=(now/1000)%2.2,local=cyc<1.1?cyc:9;
+  cvs.forEach(cv=>{
+    const fake={fx:c.fx,trans:{type:cv.dataset.tr,dur:1.1},kb:0,dur:1};
+    TRr.draw(sf.img,sceneParams(fake,local,asp,{vw:sf.vw,vh:sf.vh}));
+    cv.getContext('2d').drawImage(TRr.out,0,0);
+  });
+}
+function drawAnimThumbs(now){
+  const x=selText();const st=x?x.style:'impact';
+  document.querySelectorAll('canvas[data-anim]').forEach(cv=>drawAnimThumb(cv,cv.dataset.anim,now/1000,st));
+}
+function drawThumbs(){
+  document.querySelectorAll('canvas[data-style]').forEach(cv=>{try{drawStyleThumb(cv,cv.dataset.style);}catch(e){}});
+  document.querySelectorAll('canvas[data-tstyle]').forEach(cv=>{try{drawTextStyleThumb(cv,cv.dataset.tstyle);}catch(e){}});
+}
 let lastTT='',lastPH=-1;
 function tick(now){
   if(!S.exporting){
@@ -117,6 +169,11 @@ function tick(now){
       dirty=true;
     }
     if(dirty&&R){dirty=false;try{renderScene(R,S.t);}catch(e){logErr('render: '+e.message);}}
+    try{
+      if(S.tab==='fx'&&thumbDirty&&!S.playing&&now-lastTh>300){thumbDirty=false;lastTh=now;drawFxThumbs();}
+      else if(S.tab==='trans'&&now-lastAnim>60){lastAnim=now;drawTransThumbs(now);}
+      else if(S.tab==='text'&&now-lastAnim>60){lastAnim=now;drawAnimThumbs(now);}
+    }catch(e){logErr('miniaturas: '+e.message);}
     const tt=`${fmt(S.t)} / ${fmt(S.total)}`;if(tt!==lastTT){lastTT=tt;$('time').textContent=tt;}
     const px=Math.round(S.t*S.pps);if(px!==lastPH){lastPH=px;$('playhead').style.transform=`translateX(${px}px)`;}
     if(S.playing){const sc=$('tlScroll');if(px>sc.scrollLeft+sc.clientWidth-40||px<sc.scrollLeft)sc.scrollLeft=px-60;}
@@ -188,20 +245,20 @@ function bindTimeline(){
 }
 
 /* ---------- painéis ---------- */
-const TABS=[['clip','Clipe'],['fx','Efeitos'],['trans','Transições'],['text','Texto'],['caps','Legendas'],['exp','Exportar']];
+const TABS=[['clip','Clipe'],['fx','Efeitos'],['trans','Transições'],['text','Texto'],['caps','Legendas'],['ai','IA'],['exp','Exportar']];
 function renderTabs(){$('tabs').innerHTML=TABS.map(([k,n])=>`<button role="tab" class="${S.tab===k?'on':''}" data-tab="${k}">${n}</button>`).join('');}
 const rng=(sc,k,label,min,max,step,val,f)=>`<label class="rg"><span>${label}<b data-out="${sc}.${k}">${f?f(val):val}</b></span><input type="range" data-sc="${sc}" data-k="${k}" min="${min}" max="${max}" step="${step}" value="${val}"></label>`;
 const fmtX=v=>(+v).toFixed(2)+'×',fmtP=v=>Math.round(v*100)+'%',fmtN=v=>(+v).toFixed(2),fmtS=v=>(v>0?'+':'')+(+v).toFixed(2)+'s';
 const empty=m=>`<div class="emptyp"><p>${m}</p></div>`;
+let lastTab=null;
 function renderPanel(){
-  renderTabs();const b=$('panelBody');
-  const fn={clip:pClip,fx:pFx,trans:pTrans,text:pText,caps:pCaps,exp:pExp}[S.tab];
+  renderTabs();const b=$('panelBody');const keep=lastTab===S.tab?b.scrollTop:0;
+  const fn={clip:pClip,fx:pFx,trans:pTrans,text:pText,caps:pCaps,ai:pAI,exp:pExp}[S.tab];
   try{b.innerHTML=fn();bindPanel(b);}catch(e){logErr('painel: '+e.message);b.innerHTML=empty('Erro no painel: '+esc(e.message));}
+  b.scrollTop=keep;lastTab=S.tab;
   if(S.tab==='exp')probeExport();
-  if(S.tab==='caps')drawThumbs();
-}
-function drawThumbs(){
-  document.querySelectorAll('canvas[data-style]').forEach(cv=>{try{drawStyleThumb(cv,cv.dataset.style);}catch(e){}});
+  if(S.tab==='caps'||S.tab==='text')drawThumbs();
+  if(S.tab==='fx'){thumbDirty=true;lastTh=0;}
 }
 function pClip(){
   const c=selClip();if(!c)return empty('Importa um ou mais vídeos para começar a editar.');
@@ -217,15 +274,15 @@ function pClip(){
 }
 function pFx(){
   const c=selClip();if(!c)return empty('Importa um vídeo para aplicar efeitos.');
-  return `<div class="chips">${Object.entries(PRESETS).map(([k,p])=>`<button class="chip ${c.fx.preset===k?'on':''}" data-preset="${k}">${p.n}</button>`).join('')}</div>
+  return `<div class="thumbgrid">${Object.entries(PRESETS).map(([k,p])=>`<button class="thumbcard ${c.fx.preset===k?'on':''}" data-preset="${k}" aria-label="${p.n}"><canvas data-fx="${k}" width="110" height="196"></canvas><span>${p.n}</span></button>`).join('')}</div>
   <div class="btnrow"><button class="btn" data-act="fxall">Aplicar a todos os clipes</button></div>
   ${FX_RANGES.map(([k,l,mn,mx,st])=>rng('fx',k,l,mn,mx,st,c.fx[k],fmtN)).join('')}
   <label class="chk"><input type="checkbox" data-sc="fx" data-k="mirror" data-num="1" ${c.fx.mirror?'checked':''}> Espelhar</label>`;
 }
 function pTrans(){
   const c=selClip();if(!c)return empty('Importa um vídeo para escolher transições.');
-  return `<p class="hint">A transição aplica-se ao início do clipe selecionado (entrada).</p>
-  <div class="chips">${Object.entries(TRANS).map(([k,n])=>`<button class="chip ${c.trans.type===k?'on':''}" data-trans="${k}">${n}</button>`).join('')}</div>
+  return `<p class="hint">A transição aplica-se ao início do clipe selecionado (entrada). As miniaturas mostram o movimento.</p>
+  <div class="thumbgrid">${Object.entries(TRANS).map(([k,n])=>`<button class="thumbcard ${c.trans.type===k?'on':''}" data-trans="${k}" aria-label="${n}"><canvas data-tr="${k}" width="110" height="196"></canvas><span>${n}</span></button>`).join('')}</div>
   ${rng('trans','dur','Duração',0.2,2,0.05,c.trans.dur,v=>(+v).toFixed(2)+'s')}
   <div class="btnrow"><button class="btn" data-act="transall">Aplicar a todos os clipes</button></div>`;
 }
@@ -233,15 +290,18 @@ function pText(){
   const x=selText();
   let h=`<div class="btnrow"><button class="btn primary" data-act="addtext">${ICON.plus} Adicionar texto</button>${x?`<button class="btn danger" data-act="del">${ICON.trash} Apagar</button>`:''}</div>`;
   if(!x)return h+empty(S.texts.length?'Toca num texto na timeline para o editar.':'Ainda sem textos. Adiciona o primeiro.');
-  const opt=(a,v)=>a.map(([k,n])=>`<option value="${k}" ${v===k?'selected':''}>${n}</option>`).join('');
+  const styles=TEXT_STYLES.map(k=>`<button class="stylecard ${x.style===k?'on':''}" data-tstyle="${k}" aria-label="${TEXT_STYLE_NAMES[k]}"><canvas data-tstyle="${k}" width="300" height="130"></canvas><span>${TEXT_STYLE_NAMES[k]}</span></button>`).join('');
+  const anims=[['none','Nenhuma'],['pop','Pop'],['fade','Fade'],['slide','Subir'],['type','Máquina']].map(([k,n])=>`<button class="stylecard ${x.anim===k?'on':''}" data-tanim="${k}" aria-label="${n}"><canvas data-anim="${k}" width="300" height="130"></canvas><span>${n}</span></button>`).join('');
+  const sw=HI_COLORS.map(c=>`<button class="swatch ${x.hi===c?'on':''}" data-thi="${c}" style="background:${c}" aria-label="Cor ${c}"></button>`).join('');
   return h+`<label class="fld">Texto<textarea data-sc="text" data-k="text" rows="2">${esc(x.text)}</textarea></label>
+  <p class="hint">Estilo</p><div class="stylegrid">${styles}</div>
+  <p class="hint">Animação</p><div class="stylegrid">${anims}</div>
+  <p class="hint">Cor de destaque / fundo</p><div class="swatches">${sw}<input type="color" data-sc="text" data-k="hi" value="${x.hi}" aria-label="Cor personalizada"></div>
+  <div class="row2"><label class="fld">Cor do texto<input type="color" data-sc="text" data-k="color" value="${x.color}"></label>
+  <label class="fld">Fonte<select data-sc="text" data-k="font"><option value="auto" ${x.font==='auto'?'selected':''}>Automática</option>${FONTS.map(f=>`<option ${x.font===f?'selected':''}>${f}</option>`).join('')}</select></label></div>
   <div class="row2"><label class="fld">Início (s)<input type="number" data-sc="text" data-k="start" data-num="1" min="0" step="0.1" value="${x.start.toFixed(2)}"></label>
   <label class="fld">Duração (s)<input type="number" data-sc="text" data-k="dur" data-num="1" min="0.2" step="0.1" value="${x.dur.toFixed(2)}"></label></div>
-  ${rng('text','size','Tamanho',20,200,1,x.size,v=>v)}${rng('text','y','Posição vertical',5,95,1,x.y,v=>v+'%')}
-  <div class="row2"><label class="fld">Fonte<select data-sc="text" data-k="font">${opt(FONTS.map(f=>[f,f]),x.font)}</select></label>
-  <label class="fld">Animação<select data-sc="text" data-k="anim">${opt([['none','Nenhuma'],['pop','Pop'],['fade','Fade'],['slide','Subir'],['type','Máquina de escrever']],x.anim)}</select></label></div>
-  <div class="row2"><label class="fld">Cor<input type="color" data-sc="text" data-k="color" value="${x.color}"></label>
-  <div class="checks"><label class="chk"><input type="checkbox" data-sc="text" data-k="bg" ${x.bg?'checked':''}> Caixa</label><label class="chk"><input type="checkbox" data-sc="text" data-k="stroke" ${x.stroke?'checked':''}> Contorno</label><label class="chk"><input type="checkbox" data-sc="text" data-k="bold" ${x.bold?'checked':''}> Negrito</label></div></div>`;
+  ${rng('text','size','Tamanho',20,200,1,x.size,v=>v)}${rng('text','y','Posição vertical',5,95,1,x.y,v=>v+'%')}`;
 }
 function pCaps(){
   const cs=S.capStyle,eng=CFG.engine||'groq',lang=CFG.lang==null?'pt':CFG.lang;
@@ -251,10 +311,19 @@ function pCaps(){
   const L=[['pt','Português'],['en','Inglês'],['es','Espanhol'],['fr','Francês'],['de','Alemão'],['it','Italiano'],['','Detetar automaticamente']];
   const styles=Object.entries(CAP_PRESETS).map(([k,p])=>`<button class="stylecard ${cs.preset===k?'on':''}" data-cappreset="${k}" aria-label="${p.n}"><canvas data-style="${k}" width="300" height="130"></canvas><span>${p.n}</span></button>`).join('');
   const sw=HI_COLORS.map(c=>`<button class="swatch ${cs.hi===c?'on':''}" data-hi="${c}" style="background:${c}" aria-label="Cor ${c}"></button>`).join('');
+  const pal=cs.pal.map((c,i)=>`<input type="color" data-pal="${i}" value="${c}" aria-label="Cor ${i+1} da paleta">`).join('');
+  const paperOpen=(CAP_PRESETS[cs.preset]||{}).paper||cs.preset==='classic'||cs.preset==='wordbox';
   return `<div class="box"><h3>Estilo das legendas</h3>
   <div class="stylegrid">${styles}</div>
   <p class="hint">Cor de destaque (palavra a ser dita)</p>
   <div class="swatches">${sw}<input type="color" data-sc="capStyle" data-k="hi" value="${cs.hi}" aria-label="Cor personalizada"></div>
+  <details class="paper" ${paperOpen?'open':''}><summary>Fundos e papéis (Jornal, Clássico, Caixas)</summary>
+   <label class="fld">Modo dos fundos "Jornal"<select data-sc="capStyle" data-k="palMode"><option value="multi" ${cs.palMode==='multi'?'selected':''}>Cores alternadas (paleta)</option><option value="rand" ${cs.palMode==='rand'?'selected':''}>Uma cor aleatória por palavra</option><option value="one" ${cs.palMode==='one'?'selected':''}>Uma só cor em todos os fundos</option></select></label>
+   <div class="row2"><label class="fld">Cor única<input type="color" data-sc="capStyle" data-k="one" value="${cs.one}"></label>
+   <label class="fld">Fundo (Clássico/Caixas)<input type="color" data-sc="capStyle" data-k="bgc" value="${cs.bgc}"></label></div>
+   <p class="hint">Paleta do Jornal (5 cores, uma por papel)</p><div class="swatches">${pal}</div>
+   <label class="chk"><input type="checkbox" data-sc="capStyle" data-k="ransomHi" ${cs.ransomHi?'checked':''}> Palavra ativa usa a cor de destaque</label>
+  </details>
   <div class="row2"><label class="fld">Cor do texto<input type="color" data-sc="capStyle" data-k="color" value="${cs.color}"></label>
   <label class="fld">Fonte<select data-sc="capStyle" data-k="font"><option value="auto" ${cs.font==='auto'?'selected':''}>Automática (do estilo)</option>${FONTS.map(f=>`<option ${cs.font===f?'selected':''}>${f}</option>`).join('')}</select></label></div>
   ${rng('capStyle','size','Tamanho',30,140,1,cs.size,v=>v)}${rng('capStyle','y','Posição vertical',5,95,1,cs.y,v=>v+'%')}
@@ -277,6 +346,19 @@ function pCaps(){
   <div class="btnrow"><label class="btn">Importar .srt<input type="file" id="srtIn" accept=".srt,text/plain" hidden></label><button class="btn" data-act="srtout">Exportar .srt</button><button class="btn danger" data-act="clearcaps">Limpar</button></div>
   <p class="hint">Corrige o texto e os tempos abaixo. Gera as legendas depois de acabares de cortar e mudar velocidades, porque os tempos seguem a timeline.</p>
   <div class="caplist">${rows||empty('Sem legendas ainda.')}</div>`;
+}
+const AI_EXAMPLES=['Remove os silêncios','Aplica o efeito Cinema e transição zoom em todos os clipes','Acelera tudo 1.3x e põe legendas estilo jornal com fundos amarelos','Traduz as legendas para inglês','Corta do segundo 5 ao 8','Adiciona o título "Casa T3 em Setúbal" nos primeiros 3 segundos'];
+function pAI(){
+  const L=S.aiLog;
+  const hasKey=!!(CFG.key_groq||CFG.key_openai);
+  return `<div class="box"><h3>Editar com IA</h3>
+  <p class="hint">Escreve o que queres em português. A IA lê o teu projeto (clipes, legendas e transcrição) e faz as alterações. Podes desfazer.${hasKey?'':' <b>Falta a chave API:</b> cola-a no separador Legendas.'}</p>
+  <textarea id="aiPromptEdit" rows="3" placeholder="ex.: Remove os silêncios, aplica o efeito Cinema e põe legendas estilo jornal com fundo amarelo">${esc(L?L.prompt:'')}</textarea>
+  <div class="chips" style="margin-top:8px">${AI_EXAMPLES.map((e,i)=>`<button class="chip" data-aiex="${i}">${esc(e)}</button>`).join('')}</div>
+  <button class="btn primary wide" data-act="airun">Executar</button>
+  <p class="hint" id="aiEditStatus"></p>
+  ${L?`<div class="ailog"><p class="hint"><b>${esc(L.explicacao||'Feito.')}</b></p>${L.log.map(x=>`<div class="${x.ok?'ok':'no'}">${x.ok?'✓':'✕'} ${esc(x.t)}</div>`).join('')||'<div class="no">Nenhuma ação executada.</div>'}<button class="btn" data-act="undoai">Desfazer tudo isto</button></div>`:''}
+  </div>`;
 }
 const EXP={res:1080,fps:30,q:'high',audio:true,method:'auto',cancel:false,busy:false,support:{},result:null};
 function pExp(){
@@ -327,8 +409,8 @@ async function copyText(txt,ok){
   catch(e){const t=document.createElement('textarea');t.value=txt;document.body.appendChild(t);t.select();try{document.execCommand('copy');toast(ok);}catch(_){toast('Não consegui copiar.');}t.remove();}
 }
 function copyDiag(){
-  const d={ua:navigator.userAgent,webcodecs:hasWC(),audioEncoder:'AudioEncoder' in window,mediaRecorder:!!window.MediaRecorder,isolated:window.crossOriginIsolated,
-    ratio:S.ratio.join(':'),clips:S.clips.map(c=>({n:c.name,dur:+c.dur.toFixed(1),speed:c.speed,w:SRC[c.src].vw,h:SRC[c.src].vh,type:SRC[c.src].file.type})),caps:S.caps.length,texts:S.texts.length,exp:{res:EXP.res,fps:EXP.fps,sup:EXP.support},erros:LOG};
+  const d={ua:navigator.userAgent,viewport:innerWidth+'x'+innerHeight,webcodecs:hasWC(),audioEncoder:'AudioEncoder' in window,mediaRecorder:!!window.MediaRecorder,isolated:window.crossOriginIsolated,
+    ratio:S.ratio.join(':'),clips:S.clips.map(c=>({n:c.name,dur:+c.dur.toFixed(1),speed:c.speed,w:SRC[c.src].vw,h:SRC[c.src].vh,type:SRC[c.src].file.type})),caps:S.caps.length,texts:S.texts.length,exp:{res:EXP.res,fps:EXP.fps,sup:EXP.support},chatModel:CFG.chatModel,erros:LOG};
   copyText(JSON.stringify(d,null,1),'Diagnóstico copiado. Cola-o na conversa.');
 }
 function copyCfgLink(){
@@ -358,12 +440,17 @@ function bindPanel(root){
       layout();renderTimeline();invalidate();
     };
     el.addEventListener('input',upd);
-    el.addEventListener('change',()=>{upd();commit();if(el.dataset.sc==='fx')renderPanel();else if(el.dataset.sc==='capStyle'&&['hi','color','font','upper','size'].includes(el.dataset.k))drawThumbs();});
+    el.addEventListener('change',()=>{upd();commit();if(el.dataset.sc==='fx')renderPanel();else if(el.dataset.sc==='capStyle'||el.dataset.sc==='text')drawThumbs();});
   });
   root.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{const c=selClip();if(!c)return;Object.assign(c.fx,FX_DEFAULT,PRESETS[b.dataset.preset].v,{preset:b.dataset.preset});commit();renderPanel();invalidate();});
   root.querySelectorAll('[data-trans]').forEach(b=>b.onclick=()=>{const c=selClip();if(!c)return;c.trans.type=b.dataset.trans;commit();renderPanel();if(b.dataset.trans!=='none'){setT(c.tStart+0.05);}});
-  root.querySelectorAll('[data-cappreset]').forEach(b=>b.onclick=()=>{S.capStyle.preset=b.dataset.cappreset;commit();root.querySelectorAll('.stylecard').forEach(x=>x.classList.toggle('on',x===b));invalidate();});
-  root.querySelectorAll('[data-hi]').forEach(b=>b.onclick=()=>{S.capStyle.hi=b.dataset.hi;commit();root.querySelectorAll('.swatch').forEach(x=>x.classList.toggle('on',x===b));drawThumbs();invalidate();});
+  root.querySelectorAll('[data-cappreset]').forEach(b=>b.onclick=()=>{S.capStyle.preset=b.dataset.cappreset;commit();root.querySelectorAll('.stylecard[data-cappreset]').forEach(x=>x.classList.toggle('on',x===b));const d=root.querySelector('details.paper');if(d&&(CAP_PRESETS[b.dataset.cappreset]||{}).paper)d.open=true;invalidate();});
+  root.querySelectorAll('[data-hi]').forEach(b=>b.onclick=()=>{S.capStyle.hi=b.dataset.hi;commit();root.querySelectorAll('[data-hi]').forEach(x=>x.classList.toggle('on',x===b));drawThumbs();invalidate();});
+  root.querySelectorAll('[data-pal]').forEach(el=>{el.addEventListener('input',()=>{S.capStyle.pal[+el.dataset.pal]=el.value;invalidate();});el.addEventListener('change',()=>{commit();drawThumbs();});});
+  root.querySelectorAll('[data-tstyle].stylecard').forEach(b=>b.onclick=()=>{const x=selText();if(!x)return;x.style=b.dataset.tstyle;commit();root.querySelectorAll('.stylecard[data-tstyle]').forEach(y=>y.classList.toggle('on',y===b));invalidate();});
+  root.querySelectorAll('[data-tanim]').forEach(b=>b.onclick=()=>{const x=selText();if(!x)return;x.anim=b.dataset.tanim;commit();root.querySelectorAll('.stylecard[data-tanim]').forEach(y=>y.classList.toggle('on',y===b));invalidate();});
+  root.querySelectorAll('[data-thi]').forEach(b=>b.onclick=()=>{const x=selText();if(!x)return;x.hi=b.dataset.thi;commit();root.querySelectorAll('[data-thi]').forEach(y=>y.classList.toggle('on',y===b));drawThumbs();invalidate();});
+  root.querySelectorAll('[data-aiex]').forEach(b=>b.onclick=()=>{$('aiPromptEdit').value=AI_EXAMPLES[+b.dataset.aiex];});
   root.querySelectorAll('[data-capdel]').forEach(b=>b.onclick=()=>{S.caps=S.caps.filter(x=>x.id!==b.dataset.capdel);commit();refreshAll();});
   root.querySelectorAll('.cap-row').forEach(r=>{
     r.addEventListener('focusin',()=>{const s=S.caps.find(x=>x.id===r.dataset.cap);if(s){S.sel={type:'cap',id:s.id};if(!S.playing)setT(s.start+0.01);renderTimeline();}});
@@ -398,13 +485,23 @@ async function act(a){
   if(a==='split')splitAt();else if(a==='dup')dupClip();else if(a==='left')moveClip(-1);else if(a==='right')moveClip(1);else if(a==='del')deleteSel();
   else if(a==='fxall'){const c=selClip();S.clips.forEach(x=>{x.fx=JSON.parse(JSON.stringify(c.fx));});commit();toast('Efeito aplicado a todos.');}
   else if(a==='transall'){const c=selClip();S.clips.forEach(x=>{x.trans=JSON.parse(JSON.stringify(c.trans));});commit();toast('Transição aplicada a todos.');}
-  else if(a==='addtext'){const x={id:nid(),text:'Escreve aqui',start:S.t,dur:3,size:80,color:'#ffffff',y:50,bg:false,stroke:true,bold:true,font:'Montserrat',anim:'pop'};S.texts.push(x);S.sel={type:'text',id:x.id};commit();refreshAll();}
+  else if(a==='addtext'){const x={id:nid(),text:'Escreve aqui',start:S.t,dur:3,size:90,color:'#ffffff',hi:S.capStyle.hi,y:50,style:'impact',font:'auto',anim:'pop'};S.texts.push(x);S.sel={type:'text',id:x.id};commit();refreshAll();}
   else if(a==='addcap'){const s={id:nid(),start:S.t,end:S.t+2,text:'Nova legenda',wt:null};S.caps.push(s);S.caps.sort((p,q)=>p.start-q.start);S.sel={type:'cap',id:s.id};commit();refreshAll();}
   else if(a==='capm'||a==='capp'){const d=a==='capm'?-0.1:0.1;S.caps.forEach(s=>{s.start=Math.max(0,s.start+d);s.end=Math.max(s.start+0.1,s.end+d);if(s.words){s.words=s.words.map(w=>({w:w.w,s:Math.max(0,w.s+d),e:Math.max(0,w.e+d)}));}});commit();refreshAll();return;}
   else if(a==='clearcaps'){S.caps=[];commit();refreshAll();}
   else if(a==='srtout'){if(!S.caps.length)return toast('Sem legendas.');download('legendas.srt',toSRT(),'text/plain');}
   else if(a==='diag'){copyDiag();return;}
   else if(a==='cfglink'){copyCfgLink();return;}
+  else if(a==='undoai'){undo();S.aiLog=null;renderPanel();return;}
+  else if(a==='airun'){
+    const p=($('aiPromptEdit').value||'').trim();if(!p)return toast('Escreve o que queres que a IA faça.');
+    const st=m=>{const e=$('aiEditStatus');if(e)e.textContent=m;};
+    commit();let r=null;
+    try{r=await aiEditRun(p,st);}
+    catch(e){console.error(e);logErr('IA: '+e.message);st('Erro: '+e.message);toast('Falhou: '+e.message,6000);}
+    if(r){S.aiLog={prompt:p,explicacao:r.explicacao,log:r.log};commit();S.sel=null;refreshAll(true);}
+    return;
+  }
   else if(a==='autocap'){
     if(!S.clips.length)return toast('Importa um vídeo primeiro.');
     const st=m=>{const e=$('aiStatus');if(e)e.textContent=m;};
@@ -426,11 +523,13 @@ function init(){
   $('fileIn').onchange=e=>{importFiles([...e.target.files]);e.target.value='';};
   $('btnPlay').onclick=()=>S.playing?pause():play();$('btnPlay').innerHTML=ICON.play;
   $('btnSplit').onclick=splitAt;$('btnSplit').innerHTML=ICON.split;$('btnDel').onclick=deleteSel;$('btnDel').innerHTML=ICON.trash;$('btnUndo').onclick=undo;$('btnUndo').innerHTML=ICON.undo;
+  $('panelToggle').innerHTML=ICON.expand;$('panelToggle').onclick=()=>{const a=document.querySelector('.app'),b=$('panelToggle');if(a.classList.contains('tall')){a.classList.remove('tall');a.classList.add('mini');b.classList.remove('flip');b.classList.add('mini');}else if(a.classList.contains('mini')){a.classList.remove('mini');b.classList.remove('mini');}else{a.classList.add('tall');b.classList.add('flip');}setTimeout(invalidate,50);};
   $('ratio').onchange=e=>{S.ratio=e.target.value.split(':').map(Number);initRenderer();commit();if(S.tab==='exp')renderPanel();};
   $('tabs').onclick=e=>{const b=e.target.closest('[data-tab]');if(b){S.tab=b.dataset.tab;renderPanel();}};
   $('btnExport').onclick=()=>{S.tab='exp';renderPanel();$('panelBody').scrollTop=0;};
   document.addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;if(e.code==='Space'){e.preventDefault();S.playing?pause():play();}else if(e.key==='s')splitAt();else if(e.key==='Delete'||e.key==='Backspace')deleteSel();else if((e.ctrlKey||e.metaKey)&&e.key==='z')undo();});
-  if(document.fonts){FONTS.forEach(f=>document.fonts.load(`700 40px "${f}"`).then(()=>{invalidate();if(S.tab==='caps')drawThumbs();}).catch(()=>{}));document.fonts.ready.then(()=>{invalidate();if(S.tab==='caps')drawThumbs();});}
+  if(document.fonts){ALL_FONTS.forEach(f=>document.fonts.load(`800 40px "${f}"`).then(()=>{invalidate();if(S.tab==='caps'||S.tab==='text')drawThumbs();}).catch(()=>{}));document.fonts.ready.then(()=>{invalidate();if(S.tab==='caps'||S.tab==='text')drawThumbs();});}
+  window.addEventListener('resize',()=>{invalidate();});
   commit();layout();renderTimeline();renderPanel();requestAnimationFrame(tick);
   if(_cfgImported){S.tab='caps';renderPanel();toast('Configuração importada ✓ (chave e preferências guardadas)',5000);}
   if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});

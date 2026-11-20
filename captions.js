@@ -3,9 +3,10 @@
 let ASRW=null;
 const LANG_NAMES={pt:'portuguese',en:'english',es:'spanish',fr:'french',de:'german',it:'italian','':''};
 const CLOUD={
-  groq:{url:'https://api.groq.com/openai/v1/audio/transcriptions',chat:'https://api.groq.com/openai/v1/chat/completions',chatModel:'llama-3.3-70b-versatile',label:'Groq'},
-  openai:{url:'https://api.openai.com/v1/audio/transcriptions',chat:'https://api.openai.com/v1/chat/completions',chatModel:'gpt-4o-mini',label:'OpenAI'}
+  groq:{url:'https://api.groq.com/openai/v1/audio/transcriptions',chat:'https://api.groq.com/openai/v1/chat/completions',label:'Groq'},
+  openai:{url:'https://api.openai.com/v1/audio/transcriptions',chat:'https://api.openai.com/v1/chat/completions',label:'OpenAI'}
 };
+const sleepMs=ms=>new Promise(r=>setTimeout(r,ms));
 function encodeWav(f32,sr){
   const n=f32.length,buf=new ArrayBuffer(44+n*2),v=new DataView(buf);
   const W=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
@@ -14,10 +15,17 @@ function encodeWav(f32,sr){
   for(let i=0;i<n;i++){const s=Math.max(-1,Math.min(1,f32[i]));v.setInt16(44+i*2,s<0?s*0x8000:s*0x7fff,true);}
   return buf;
 }
+function httpErr(r,tx){
+  if(r.status===401)return 'Chave API inválida ou expirada.';
+  if(r.status===413)return 'Ficheiro de áudio demasiado grande para o plano grátis (25 MB).';
+  if(r.status===429)return 'Limite de pedidos atingido (plano grátis). Espera 1 minuto e tenta de novo.';
+  return `Erro ${r.status}: ${String(tx).slice(0,160)}`;
+}
 async function cloudASR(audio,o,status){
   const P=CLOUD[o.engine];if(!o.key)throw new Error('Cola a chave API da '+P.label+'.');
   const model=o.engine==='openai'?'whisper-1':(o.cloudModel||'whisper-large-v3');
   const sr=16000,CH=600*sr,words=[];
+  const prompt=(o.prompt||'').slice(0,600);
   for(let off=0,i=0;off<audio.length;off+=CH,i++){
     status(`A enviar áudio para ${P.label} (parte ${i+1}/${Math.ceil(audio.length/CH)})…`);
     const wav=encodeWav(audio.subarray(off,off+CH),sr);
@@ -27,11 +35,11 @@ async function cloudASR(audio,o,status){
     fd.append('timestamp_granularities[]','word');fd.append('timestamp_granularities[]','segment');
     fd.append('temperature','0');
     if(o.lang)fd.append('language',o.lang);
-    if(o.prompt)fd.append('prompt',o.prompt);
+    if(prompt)fd.append('prompt',prompt);
     let r;
     try{r=await fetch(P.url,{method:'POST',headers:{Authorization:'Bearer '+o.key},body:fd});}
     catch(e){throw new Error('Sem ligação ao serviço '+P.label+' (rede ou bloqueio do navegador).');}
-    if(!r.ok){const tx=(await r.text()).slice(0,200);throw new Error(r.status===401?'Chave API inválida.':`Erro ${r.status}: ${tx}`);}
+    if(!r.ok)throw new Error(httpErr(r,await r.text()));
     const j=await r.json(),base=off/sr;
     const bad=(j.segments||[]).filter(s=>(s.no_speech_prob>0.6&&s.avg_logprob<-0.7)||s.compression_ratio>2.4);
     const isBad=t=>bad.some(s=>t>=s.start-0.05&&t<=s.end+0.05);
@@ -81,16 +89,51 @@ function groupWords(words,o){
   }
   return segs;
 }
+/* ---- chat (correção e edição por IA) ---- */
+function parseJSONLoose(s){
+  s=String(s||'').replace(/```json|```/g,'');
+  const a=s.indexOf('{'),b=s.lastIndexOf('}');
+  if(a<0||b<=a)throw new Error('A IA não devolveu JSON.');
+  return JSON.parse(s.slice(a,b+1));
+}
+async function chatLLM(messages,o){
+  o=o||{};
+  let eng=CFG.engine||'groq';if(eng==='local')eng=CFG.key_groq?'groq':'openai';
+  if(!CFG['key_'+eng]&&CFG.key_groq)eng='groq';else if(!CFG['key_'+eng]&&CFG.key_openai)eng='openai';
+  const P=CLOUD[eng],key=CFG['key_'+eng];
+  if(!key)throw new Error('Falta a chave API. Cola-a em Legendas → Chave API.');
+  const models=eng==='groq'?[CFG.chatModel,'openai/gpt-oss-120b','openai/gpt-oss-20b','llama-3.3-70b-versatile']:['gpt-4o-mini'];
+  let lastErr='sem resposta';
+  for(const m of [...new Set(models.filter(Boolean))]){
+    for(let attempt=0;attempt<3;attempt++){
+      const body={model:m,temperature:o.temp==null?0.2:o.temp,max_completion_tokens:o.max||2500,messages};
+      if(/gpt-oss/.test(m))body.reasoning_effort='low';
+      let r;
+      try{r=await fetch(P.chat,{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify(body)});}
+      catch(e){throw new Error('Sem ligação ao serviço '+P.label+'.');}
+      if(r.ok){
+        const j=await r.json();const txt=j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content;
+        if(txt){if(eng==='groq'&&CFG.chatModel!==m){CFG.chatModel=m;saveCFG();}return txt;}
+        lastErr='resposta vazia';break;
+      }
+      const tx=await r.text();lastErr=httpErr(r,tx);
+      if(r.status===401)throw new Error(lastErr);
+      if(r.status===429){const ra=parseFloat(r.headers.get('retry-after'))||8;if(attempt<2){await sleepMs(Math.min(20,ra)*1000);continue;}throw new Error(lastErr);}
+      if(r.status===400&&body.reasoning_effort){delete body.reasoning_effort;}
+      break;
+    }
+  }
+  throw new Error(lastErr);
+}
 async function aiFix(segs,o,status){
-  const P=CLOUD[o.engine];let fixed=0;
+  let fixed=0;
   for(let i=0;i<segs.length;i+=40){
     status(`A corrigir ortografia com IA… ${Math.min(segs.length,i+40)}/${segs.length}`);
     const part=segs.slice(i,i+40);
-    const sys='És revisor de legendas em português europeu. Corrige erros de reconhecimento de fala (palavras mal ouvidas, acentos, nomes próprios) usando o contexto da lista completa. REGRA CRÍTICA: cada legenda tem de manter EXATAMENTE o mesmo número de palavras (separadas por espaços); não juntes, não dividas, não acrescentes nem removas palavras. Mantém a pontuação existente. '+(o.prompt?('Vocabulário esperado: '+o.prompt+'. '):'')+'Responde só com JSON: {"t":["legenda 1","legenda 2",...]} com o mesmo número de itens.';
+    const sys='És revisor de legendas em português europeu. Corrige erros de reconhecimento de fala (palavras mal ouvidas, acentos, nomes próprios) usando o contexto. REGRA CRÍTICA: cada legenda tem de manter EXATAMENTE o mesmo número de palavras (separadas por espaços); não juntes, não dividas, não acrescentes nem removas palavras. Mantém a pontuação. '+(o.prompt?('Vocabulário esperado: '+o.prompt+'. '):'')+'Responde só com JSON: {"t":["legenda 1","legenda 2",...]} com o mesmo número de itens.';
     try{
-      const r=await fetch(P.chat,{method:'POST',headers:{Authorization:'Bearer '+o.key,'Content-Type':'application/json'},body:JSON.stringify({model:P.chatModel,temperature:0,response_format:{type:'json_object'},messages:[{role:'system',content:sys},{role:'user',content:JSON.stringify(part.map(s=>s.text))}]})});
-      if(!r.ok)throw new Error('chat '+r.status);
-      const j=await r.json(),arr=JSON.parse(j.choices[0].message.content).t;
+      const txt=await chatLLM([{role:'system',content:sys},{role:'user',content:JSON.stringify(part.map(s=>s.text))}],{temp:0,max:3000});
+      const arr=parseJSONLoose(txt).t;
       if(!Array.isArray(arr)||arr.length!==part.length)throw new Error('formato');
       part.forEach((s,k)=>{
         const nt=String(arr[k]||'').trim(),nw=nt.split(/\s+/).filter(Boolean),ow=s.words;
@@ -99,6 +142,9 @@ async function aiFix(segs,o,status){
     }catch(e){logErr('correção IA: '+e.message);}
   }
   return fixed;
+}
+function capOpts(){
+  return{engine:CFG.engine||'groq',key:CFG['key_'+(CFG.engine||'groq')]||'',cloudModel:CFG.cm||'whisper-large-v3',fix:CFG.fix!==false,lang:CFG.lang==null?'pt':CFG.lang,model:CFG.model||'Xenova/whisper-base',maxWords:CFG.max||3,prompt:CFG.prompt||''};
 }
 async function autoCaptions(o,status){
   status('A preparar o áudio…');

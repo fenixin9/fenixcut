@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>FenixCut — Editor de vídeo</title>
 <meta name="theme-color" content="#141413">
-<meta name="description" content="Editor de vídeo no telemóvel com legendas automáticas, efeitos e exportação até 4K.">
+<meta name="description" content="Editor de vídeo no telemóvel com legendas automáticas, edição por IA, efeitos e exportação até 4K.">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;800&family=Anton&family=Bebas+Neue&family=Bangers&family=Pacifico&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;800&family=Anton&family=Bebas+Neue&family=Bangers&family=Pacifico&family=Playfair+Display:wght@800&family=Special+Elite&family=Abril+Fatface&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -25,7 +25,7 @@
       <span>FenixCut</span>
     </div>
     <div class="topr">
-      <select id="ratio" aria-label="Formato do vídeo"><option value="9:16">9:16 Vertical</option><option value="16:9">16:9 Horizontal</option><option value="1:1">1:1 Quadrado</option><option value="4:5">4:5 Feed</option></select>
+      <select id="ratio" aria-label="Formato do vídeo"><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option><option value="4:5">4:5</option></select>
       <button class="btn" id="btnImport">Importar</button>
       <button class="btn primary" id="btnExport">Exportar</button>
     </div>
@@ -57,7 +57,7 @@
     </div>
   </section>
   <section class="panel">
-    <nav class="tabs" id="tabs" role="tablist"></nav>
+    <div class="tabrow"><nav class="tabs" id="tabs" role="tablist"></nav><button class="icon" id="panelToggle" aria-label="Aumentar ou diminuir o painel"></button></div>
     <div class="pbody" id="panelBody"></div>
   </section>
 </div>
@@ -67,6 +67,7 @@
 <script src="fx.js"></script>
 <script src="export.js"></script>
 <script src="captions.js"></script>
+<script src="ai.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
