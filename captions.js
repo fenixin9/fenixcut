@@ -3,10 +3,9 @@
 let ASRW=null;
 const LANG_NAMES={pt:'portuguese',en:'english',es:'spanish',fr:'french',de:'german',it:'italian','':''};
 const CLOUD={
-  groq:{url:'https://api.groq.com/openai/v1/audio/transcriptions',chat:'https://api.groq.com/openai/v1/chat/completions',label:'Groq'},
-  openai:{url:'https://api.openai.com/v1/audio/transcriptions',chat:'https://api.openai.com/v1/chat/completions',label:'OpenAI'}
+  groq:{url:'https://api.groq.com/openai/v1/audio/transcriptions',chat:'https://api.groq.com/openai/v1/chat/completions',models:'https://api.groq.com/openai/v1/models',label:'Groq',pref:['openai/gpt-oss-120b','llama-3.3-70b-versatile','openai/gpt-oss-20b','qwen/qwen3-32b','llama-3.1-8b-instant']},
+  openai:{url:'https://api.openai.com/v1/audio/transcriptions',chat:'https://api.openai.com/v1/chat/completions',models:'https://api.openai.com/v1/models',label:'OpenAI',pref:['gpt-4o-mini','gpt-4.1-mini','gpt-4o']}
 };
-const sleepMs=ms=>new Promise(r=>setTimeout(r,ms));
 function encodeWav(f32,sr){
   const n=f32.length,buf=new ArrayBuffer(44+n*2),v=new DataView(buf);
   const W=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
@@ -15,17 +14,48 @@ function encodeWav(f32,sr){
   for(let i=0;i<n;i++){const s=Math.max(-1,Math.min(1,f32[i]));v.setInt16(44+i*2,s<0?s*0x8000:s*0x7fff,true);}
   return buf;
 }
-function httpErr(r,tx){
-  if(r.status===401)return 'Chave API inválida ou expirada.';
-  if(r.status===413)return 'Ficheiro de áudio demasiado grande para o plano grátis (25 MB).';
-  if(r.status===429)return 'Limite de pedidos atingido (plano grátis). Espera 1 minuto e tenta de novo.';
-  return `Erro ${r.status}: ${String(tx).slice(0,160)}`;
+const _modelCache={};
+async function chatModels(o){
+  const P=CLOUD[o.engine];if(_modelCache[o.engine])return _modelCache[o.engine];
+  let ids=[];
+  try{const r=await fetch(P.models,{headers:{Authorization:'Bearer '+o.key}});if(r.ok){const j=await r.json();ids=(j.data||[]).map(m=>m.id);}else if(r.status===401)throw new Error('Chave API inválida.');}
+  catch(e){if(e.message==='Chave API inválida.')throw e;}
+  let list=P.pref.filter(m=>!ids.length||ids.includes(m));
+  if(!list.length)list=P.pref;
+  _modelCache[o.engine]=list;return list;
+}
+async function chatJSON(o,system,user){
+  const P=CLOUD[o.engine],models=await chatModels(o);let lastErr=null;
+  for(const m of models){
+    for(const rf of[true,false]){
+      try{
+        const body={model:m,temperature:0,messages:[{role:'system',content:system},{role:'user',content:user}]};
+        if(rf)body.response_format={type:'json_object'};
+        const r=await fetch(P.chat,{method:'POST',headers:{Authorization:'Bearer '+o.key,'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(!r.ok){
+          const tx=(await r.text()).slice(0,160);lastErr=new Error(`${m}: ${r.status} ${tx}`);
+          if(r.status===401)throw new Error('Chave API inválida.');
+          if(r.status===429)throw new Error('Limite de pedidos atingido. Espera um minuto e tenta de novo.');
+          if(r.status===400&&rf)continue;
+          break;
+        }
+        const j=await r.json(),txt=(j.choices&&j.choices[0]&&j.choices[0].message.content)||'';
+        const mt=txt.match(/\{[\s\S]*\}/);return JSON.parse(mt?mt[0]:txt);
+      }catch(e){lastErr=e;if(/inválida|Limite/.test(e.message))throw e;}
+    }
+  }
+  throw lastErr||new Error('IA indisponível');
+}
+function whisperPrompt(o){
+  let p='';
+  if(o.lang==='pt')p+=(o.variant==='br'?'Transcrição em português do Brasil, com pontuação e acentuação corretas. ':'Transcrição em português de Portugal, com pontuação e acentuação corretas. ');
+  if(o.prompt)p+='Vocabulário: '+o.prompt+'.';
+  return p.slice(0,600).trim();
 }
 async function cloudASR(audio,o,status){
   const P=CLOUD[o.engine];if(!o.key)throw new Error('Cola a chave API da '+P.label+'.');
   const model=o.engine==='openai'?'whisper-1':(o.cloudModel||'whisper-large-v3');
-  const sr=16000,CH=600*sr,words=[];
-  const prompt=(o.prompt||'').slice(0,600);
+  const sr=16000,CH=600*sr,words=[],prompt=whisperPrompt(o);
   for(let off=0,i=0;off<audio.length;off+=CH,i++){
     status(`A enviar áudio para ${P.label} (parte ${i+1}/${Math.ceil(audio.length/CH)})…`);
     const wav=encodeWav(audio.subarray(off,off+CH),sr);
@@ -39,7 +69,7 @@ async function cloudASR(audio,o,status){
     let r;
     try{r=await fetch(P.url,{method:'POST',headers:{Authorization:'Bearer '+o.key},body:fd});}
     catch(e){throw new Error('Sem ligação ao serviço '+P.label+' (rede ou bloqueio do navegador).');}
-    if(!r.ok)throw new Error(httpErr(r,await r.text()));
+    if(!r.ok){const tx=(await r.text()).slice(0,200);throw new Error(r.status===401?'Chave API inválida.':r.status===429?'Limite do Groq atingido (aguarda um pouco).':`Erro ${r.status}: ${tx}`);}
     const j=await r.json(),base=off/sr;
     const bad=(j.segments||[]).filter(s=>(s.no_speech_prob>0.6&&s.avg_logprob<-0.7)||s.compression_ratio>2.4);
     const isBad=t=>bad.some(s=>t>=s.start-0.05&&t<=s.end+0.05);
@@ -89,62 +119,54 @@ function groupWords(words,o){
   }
   return segs;
 }
-/* ---- chat (correção e edição por IA) ---- */
-function parseJSONLoose(s){
-  s=String(s||'').replace(/```json|```/g,'');
-  const a=s.indexOf('{'),b=s.lastIndexOf('}');
-  if(a<0||b<=a)throw new Error('A IA não devolveu JSON.');
-  return JSON.parse(s.slice(a,b+1));
-}
-async function chatLLM(messages,o){
-  o=o||{};
-  let eng=CFG.engine||'groq';if(eng==='local')eng=CFG.key_groq?'groq':'openai';
-  if(!CFG['key_'+eng]&&CFG.key_groq)eng='groq';else if(!CFG['key_'+eng]&&CFG.key_openai)eng='openai';
-  const P=CLOUD[eng],key=CFG['key_'+eng];
-  if(!key)throw new Error('Falta a chave API. Cola-a em Legendas → Chave API.');
-  const models=eng==='groq'?[CFG.chatModel,'openai/gpt-oss-120b','openai/gpt-oss-20b','llama-3.3-70b-versatile']:['gpt-4o-mini'];
-  let lastErr='sem resposta';
-  for(const m of [...new Set(models.filter(Boolean))]){
-    for(let attempt=0;attempt<3;attempt++){
-      const body={model:m,temperature:o.temp==null?0.2:o.temp,max_completion_tokens:o.max||2500,messages};
-      if(/gpt-oss/.test(m))body.reasoning_effort='low';
-      let r;
-      try{r=await fetch(P.chat,{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify(body)});}
-      catch(e){throw new Error('Sem ligação ao serviço '+P.label+'.');}
-      if(r.ok){
-        const j=await r.json();const txt=j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content;
-        if(txt){if(eng==='groq'&&CFG.chatModel!==m){CFG.chatModel=m;saveCFG();}return txt;}
-        lastErr='resposta vazia';break;
-      }
-      const tx=await r.text();lastErr=httpErr(r,tx);
-      if(r.status===401)throw new Error(lastErr);
-      if(r.status===429){const ra=parseFloat(r.headers.get('retry-after'))||8;if(attempt<2){await sleepMs(Math.min(20,ra)*1000);continue;}throw new Error(lastErr);}
-      if(r.status===400&&body.reasoning_effort){delete body.reasoning_effort;}
-      break;
-    }
+/* alinha as palavras corrigidas com os tempos originais (permite juntar/separar/acrescentar palavras) */
+function alignTimes(old,nw,s0,s1){
+  const n=old.length,m=nw.length,norm=s=>String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'');
+  const D=Array.from({length:n+1},()=>new Array(m+1).fill(0));
+  for(let i=0;i<=n;i++)D[i][0]=i;for(let j=0;j<=m;j++)D[0][j]=j;
+  for(let i=1;i<=n;i++)for(let j=1;j<=m;j++){
+    const c=norm(old[i-1].w)===norm(nw[j-1])?0:1;
+    D[i][j]=Math.min(D[i-1][j]+1,D[i][j-1]+1,D[i-1][j-1]+c);
   }
-  throw new Error(lastErr);
+  const map=new Array(m).fill(-1);let i=n,j=m;
+  while(i>0&&j>0){
+    const c=norm(old[i-1].w)===norm(nw[j-1])?0:1;
+    if(D[i][j]===D[i-1][j-1]+c){map[j-1]=i-1;i--;j--;}
+    else if(D[i][j]===D[i-1][j]+1)i--;else j--;
+  }
+  const res=nw.map((w,k)=>map[k]>=0?{w,s:old[map[k]].s,e:old[map[k]].e,k:1}:{w,s:null,e:null,k:0});
+  for(let k=0;k<m;){
+    if(res[k].k){k++;continue;}
+    let q=k;while(q<m&&!res[q].k)q++;
+    const a=k>0?res[k-1].e:s0,b=q<m?res[q].s:s1,cnt=q-k,st=Math.max(0,(b-a))/cnt;
+    for(let z=0;z<cnt;z++){res[k+z].s=a+st*z;res[k+z].e=a+st*(z+1);}
+    k=q;
+  }
+  return res.map(x=>({w:x.w,s:x.s,e:Math.max(x.e,x.s+0.05)}));
 }
+const VARIANT={
+  pt:'português europeu (Portugal), ortografia do Acordo Ortográfico de 1990 e vocabulário de Portugal (ex.: "autocarro", "telemóvel", "estou" em vez de "tô", "a gente"→"agente" só quando for o substantivo)',
+  br:'português do Brasil',
+  keep:'a variante do português que foi falada, sem a alterar'
+};
 async function aiFix(segs,o,status){
-  let fixed=0;
-  for(let i=0;i<segs.length;i+=40){
-    status(`A corrigir ortografia com IA… ${Math.min(segs.length,i+40)}/${segs.length}`);
-    const part=segs.slice(i,i+40);
-    const sys='És revisor de legendas em português europeu. Corrige erros de reconhecimento de fala (palavras mal ouvidas, acentos, nomes próprios) usando o contexto. REGRA CRÍTICA: cada legenda tem de manter EXATAMENTE o mesmo número de palavras (separadas por espaços); não juntes, não dividas, não acrescentes nem removas palavras. Mantém a pontuação. '+(o.prompt?('Vocabulário esperado: '+o.prompt+'. '):'')+'Responde só com JSON: {"t":["legenda 1","legenda 2",...]} com o mesmo número de itens.';
+  let fixed=0;const vt=VARIANT[o.variant||'pt'];
+  const sys='És revisor profissional de legendas em português. Recebes legendas transcritas automaticamente (podem ter erros). Corrige: palavras mal reconhecidas (usa o contexto das legendas vizinhas), acentuação, concordância, maiúsculas em nomes próprios e pontuação mínima. NÃO resumas, NÃO reescrevas o sentido e NÃO formalizes o estilo falado. Só juntas, separas, acrescentas ou removes palavras quando for realmente necessário para corrigir um erro. Variante: '+vt+'. '+(o.prompt?('Vocabulário/nomes esperados: '+o.prompt+'. '):'')+'Responde só com JSON: {"t":["legenda 1","legenda 2",...]} com EXATAMENTE o mesmo número de itens que recebeste em "legendas".';
+  for(let i=0;i<segs.length;i+=30){
+    status(`A corrigir ortografia com IA… ${Math.min(segs.length,i+30)}/${segs.length}`);
+    const part=segs.slice(i,i+30),prev=segs.slice(Math.max(0,i-2),i).map(s=>s.text);
     try{
-      const txt=await chatLLM([{role:'system',content:sys},{role:'user',content:JSON.stringify(part.map(s=>s.text))}],{temp:0,max:3000});
-      const arr=parseJSONLoose(txt).t;
-      if(!Array.isArray(arr)||arr.length!==part.length)throw new Error('formato');
+      const j=await chatJSON(o,sys,JSON.stringify({anteriores:prev,legendas:part.map(s=>s.text)}));
+      const arr=j.t;
+      if(!Array.isArray(arr)||arr.length!==part.length)throw new Error('formato inesperado');
       part.forEach((s,k)=>{
-        const nt=String(arr[k]||'').trim(),nw=nt.split(/\s+/).filter(Boolean),ow=s.words;
-        if(nw.length===ow.length&&nt!==s.text){s.words=ow.map((w,m)=>({w:nw[m],s:w.s,e:w.e}));s.text=nw.join(' ');s.wt=s.text;fixed++;}
+        const nt=String(arr[k]==null?'':arr[k]).trim();if(!nt||nt===s.text)return;
+        const nw=nt.split(/\s+/).filter(Boolean);if(!nw.length||nw.length>s.words.length*2+2)return;
+        s.words=alignTimes(s.words,nw,s.start,s.end);s.text=nw.join(' ');s.wt=s.text;fixed++;
       });
-    }catch(e){logErr('correção IA: '+e.message);}
+    }catch(e){logErr('correção IA: '+e.message);if(/inválida|Limite/.test(e.message))throw e;}
   }
   return fixed;
-}
-function capOpts(){
-  return{engine:CFG.engine||'groq',key:CFG['key_'+(CFG.engine||'groq')]||'',cloudModel:CFG.cm||'whisper-large-v3',fix:CFG.fix!==false,lang:CFG.lang==null?'pt':CFG.lang,model:CFG.model||'Xenova/whisper-base',maxWords:CFG.max||3,prompt:CFG.prompt||''};
 }
 async function autoCaptions(o,status){
   status('A preparar o áudio…');

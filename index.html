@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;800&family=Anton&family=Bebas+Neue&family=Bangers&family=Pacifico&family=Playfair+Display:wght@800&family=Special+Elite&family=Abril+Fatface&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;800&family=Anton&family=Bebas+Neue&family=Bangers&family=Pacifico&family=Playfair+Display:wght@800&family=Special+Elite&family=Abril+Fatface&family=Oswald:wght@600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -25,7 +25,7 @@
       <span>FenixCut</span>
     </div>
     <div class="topr">
-      <select id="ratio" aria-label="Formato do vídeo"><option value="9:16">9:16</option><option value="16:9">16:9</option><option value="1:1">1:1</option><option value="4:5">4:5</option></select>
+      <select id="ratio" aria-label="Formato do vídeo"><option value="9:16">9:16 Vertical</option><option value="16:9">16:9 Horizontal</option><option value="1:1">1:1 Quadrado</option><option value="4:5">4:5 Feed</option></select>
       <button class="btn" id="btnImport">Importar</button>
       <button class="btn primary" id="btnExport">Exportar</button>
     </div>
@@ -57,7 +57,7 @@
     </div>
   </section>
   <section class="panel">
-    <div class="tabrow"><nav class="tabs" id="tabs" role="tablist"></nav><button class="icon" id="panelToggle" aria-label="Aumentar ou diminuir o painel"></button></div>
+    <nav class="tabs" id="tabs" role="tablist"></nav>
     <div class="pbody" id="panelBody"></div>
   </section>
 </div>
