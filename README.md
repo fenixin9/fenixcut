@@ -1,13 +1,12 @@
-# FenixCut v4
+# FenixCut v5
 
-Editor de vídeo PWA (Android + iPhone): legendas automáticas (16 estilos incl. recortes de jornal), edição por IA (prompt/voz), 24 efeitos e 7 transições com miniaturas, texto com estilos e exportação 720p até 4K.
+PWA de edição de vídeo (Android + iPhone): projetos guardados automaticamente (nome editável, reabrir, duplicar, apagar), 48 efeitos e 36 transições com miniaturas, 20 estilos de legenda (5 de jornal), edição por IA, exportação até 4K.
 
-## Publicar no GitHub Pages
-1. Carrega TODOS os ficheiros desta pasta para a raiz do repositório (substitui os antigos; há um novo: ai.js).
-2. Settings -> Pages -> Deploy from a branch -> main / (root).
+## Publicar
+Carrega TODOS os ficheiros desta pasta para a raiz do repositório (novo ficheiro: project.js). Settings -> Pages -> main / (root).
 
 ## Atualizar
-Fecha a app, abre o link no navegador e recarrega 2 vezes. Se continuar antiga: apagar dados do site.
+Fecha a app, abre o link no navegador e recarrega 2 vezes. Os projetos guardados ficam no aparelho (IndexedDB) e não se perdem ao atualizar.
 
 ## Chave Groq (NUNCA no código)
-Este repositório é público. Cola a chave no separador Legendas e usa "Copiar link para configurar outro aparelho".
+Cola-a no separador Legendas e usa "Copiar link para configurar outro aparelho".

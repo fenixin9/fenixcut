@@ -38,7 +38,7 @@ function clipAt(t){for(const c of S.clips)if(t>=c.tStart&&t<c.tStart+c.dur)retur
 function srcTimeAt(c,t){return Math.min(c.out-0.001,c.in+(t-c.tStart)*c.speed);}
 const hist=[];let hi=-1;
 const snap=()=>JSON.stringify({clips:S.clips,texts:S.texts,caps:S.caps,capStyle:S.capStyle,ratio:S.ratio,fit:S.fit});
-function commit(){const s=snap();if(hist[hi]===s)return;hist.length=hi+1;hist.push(s);hi=hist.length-1;if(hist.length>60){hist.shift();hi--;}}
+function commit(){const s=snap();if(hist[hi]===s)return;hist.length=hi+1;hist.push(s);hi=hist.length-1;if(hist.length>60){hist.shift();hi--;}if(typeof scheduleSave==='function')scheduleSave();}
 function undo(){if(hi<=0)return;hi--;const o=JSON.parse(hist[hi]);Object.assign(S,{clips:o.clips,texts:o.texts,caps:o.caps,capStyle:o.capStyle,ratio:o.ratio,fit:o.fit});S.sel=null;$('ratio').value=S.ratio.join(':');initRenderer();refreshAll(true);}
 function selClip(){if(S.sel&&S.sel.type==='clip'){const c=S.clips.find(x=>x.id===S.sel.id);if(c)return c;}return clipAt(S.t)||S.clips[0]||null;}
 const selText=()=>S.sel&&S.sel.type==='text'?S.texts.find(x=>x.id===S.sel.id):null;
@@ -135,6 +135,7 @@ async function importFiles(files){
       await new Promise((res,rej)=>{v.onloadedmetadata=res;v.onerror=()=>rej(new Error('Formato não suportado neste navegador: '+f.name));});
       if(!isFinite(v.duration))throw new Error('Duração desconhecida: '+f.name);
       SRC[id]={id,file:f,url,video:v,dur:v.duration,vw:v.videoWidth,vh:v.videoHeight,name:f.name};
+      if(typeof ensureProject==='function')ensureProject(f.name);
       if(!S.clips.length){S.ratio=v.videoWidth>=v.videoHeight?[16,9]:[9,16];$('ratio').value=S.ratio.join(':');initRenderer();}
       S.clips.push({id:nid(),src:id,name:f.name.replace(/\.[^.]+$/,''),in:0,out:v.duration,speed:1,vol:1,fx:Object.assign({preset:'original'},FX_DEFAULT),trans:{type:'none',dur:0.5},kb:0});
     }catch(e){logErr(e.message);toast(e.message,5000);}
@@ -510,6 +511,7 @@ function init(){
   document.addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;if(e.code==='Space'){e.preventDefault();S.playing?pause():play();}else if(e.key==='s')splitAt();else if(e.key==='Delete'||e.key==='Backspace')deleteSel();else if((e.ctrlKey||e.metaKey)&&e.key==='z')undo();});
   if(document.fonts){FONTS.forEach(f=>document.fonts.load(`700 40px "${f}"`).then(()=>{invalidate();drawGalleries();}).catch(()=>{}));document.fonts.ready.then(()=>{invalidate();drawGalleries();});}
   commit();layout();renderTimeline();renderPanel();requestAnimationFrame(tick);
+  if(typeof initProjects==='function')initProjects();
   if(_cfgImported){S.tab='caps';renderPanel();toast('Configuração importada ✓ (chave e preferências guardadas)',5000);}
   if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
