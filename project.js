@@ -26,7 +26,7 @@ function defaultCapStyle(){return{preset:'pop',size:70,y:72,font:'auto',upper:fa
 function setSaveState(st,msg){
   const e=$('saveState');if(!e)return;
   e.className='save '+st;
-  e.textContent=st==='saving'?'A guardar…':st==='saved'?'Guardado ✓':st==='dirty'?'Alterações por guardar':st==='error'?('Erro: '+(msg||'não guardou')):'';
+  e.textContent=st==='saving'?'A guardar…':st==='saved'?'Guardado ✓':st==='dirty'?'Por guardar':st==='error'?('Erro: '+(msg||'não guardou')):'';
   e.title=msg||'';
 }
 function ensureProject(firstName){
@@ -142,15 +142,20 @@ async function renderSheet(){
   box.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>delProject(b.dataset.del));
   box.querySelectorAll('[data-bk]').forEach(b=>b.onclick=()=>exportBackup(b.dataset.bk));
 }
-/* ---------- responsivo ---------- */
+/* ---------- responsivo / foco ---------- */
 function applyViewport(){
   const vv=window.visualViewport,h=vv?vv.height:window.innerHeight;
   document.documentElement.style.setProperty('--appH',Math.round(h)+'px');
+  invalidate();
 }
 function setPanelSize(n){
   document.body.dataset.panel=n;try{localStorage.setItem('fenixcut_panel',n);}catch(e){}
-  const l={sm:'Painel: pequeno',md:'Painel: normal',lg:'Painel: grande'}[n];if($('panelSize'))$('panelSize').title=l;
   invalidate();
+}
+function setFocus(on){
+  document.body.dataset.focus=on?'1':'0';
+  $('btnFocus').classList.toggle('on',on);
+  setTimeout(invalidate,60);
 }
 async function initProjects(){
   $('projName').value=P.name;
@@ -161,10 +166,12 @@ async function initProjects(){
   window.addEventListener('pagehide',()=>{saveNow();});
   try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e){}
   applyViewport();if(window.visualViewport){visualViewport.addEventListener('resize',applyViewport);}
-  window.addEventListener('resize',applyViewport);window.addEventListener('orientationchange',()=>setTimeout(()=>{applyViewport();invalidate();},300));
+  window.addEventListener('resize',applyViewport);window.addEventListener('orientationchange',()=>setTimeout(applyViewport,300));
   let ps='md';try{ps=localStorage.getItem('fenixcut_panel')||'md';}catch(e){}
   setPanelSize(ps);
-  $('panelSize').onclick=()=>{const o={sm:'md',md:'lg',lg:'sm'};setPanelSize(o[document.body.dataset.panel||'md']);};
+  $('panelSize').onclick=()=>{if(document.body.dataset.focus==='1')setFocus(false);const o={sm:'md',md:'lg',lg:'sm'};setPanelSize(o[document.body.dataset.panel||'md']);};
+  $('btnFocus').onclick=()=>setFocus(document.body.dataset.focus!=='1');
+  $('tabs').addEventListener('click',()=>{if(document.body.dataset.focus==='1')setFocus(false);});
   let last=null;try{last=localStorage.getItem('fenixcut_last');}catch(e){}
-  if(last&&!_cfgImported){try{const r=await idbGet('projects',last);if(r)await openProject(last,true),toast('Projeto "'+r.name+'" reaberto.',3500);}catch(e){}}
+  if(last&&!_cfgImported){try{const r=await idbGet('projects',last);if(r){await openProject(last,true);toast('Projeto "'+r.name+'" reaberto.',3500);}}catch(e){}}
 }

@@ -209,7 +209,7 @@ function drawRich(ctx,W,H,tokens,o){
   if(!tokens.length)return;
   let px=o.px*(W/1080);const maxW=W*(o.maxW||0.84);
   ctx.save();ctx.textBaseline='middle';ctx.textAlign='left';
-  const wt=o.bold?800:600;
+  const wt=o.normal?400:(o.bold?800:600);
   const fnt=(k,p)=>`${wt} ${p}px "${(k&&k.font)||o.font}", sans-serif`;
   let lines,sp,anyCut=tokens.some(k=>k.cut),anyBox=tokens.some(k=>k.box);
   for(let it=0;it<8;it++){
@@ -275,7 +275,7 @@ const BG_PALETTES={
   neon:{n:'Néon',c:['#ff2ea6','#22e6d4','#c4ff00','#ffe600','#7b61ff']},
   amarelo:{n:'Amarelo',c:['#ffd23f','#ffd23f','#ffd23f','#ffd23f','#ffd23f']}
 };
-const NEWS_FONTS=['Playfair Display','Special Elite','Anton','Abril Fatface','Oswald'];
+const NEWS_FONTS=['Playfair Display','Special Elite','Oswald','Montserrat','Satoshi'];
 const CAP_PRESETS={
   pop:{n:'Pop',upper:1,stroke:1,hiMode:'color',pop:1,font:'Montserrat'},
   impact:{n:'Impacto',upper:1,stroke:2,hiMode:'color',pop:1,font:'Anton'},
@@ -306,12 +306,12 @@ const TEXT_STYLES={
   comic:{n:'Cómico',color:'#ffd23f',stroke:true,bg:false,font:'Bangers',glow:'',cut:false,bold:true},
   elegant:{n:'Elegante',color:'#ffffff',stroke:false,bg:false,font:'Playfair Display',glow:'',cut:false,bold:true},
   type:{n:'Máquina',color:'#ffffff',stroke:false,bg:true,font:'Special Elite',glow:'',cut:false,bold:false},
-  news:{n:'Jornal',color:'#111111',stroke:false,bg:false,font:'Anton',glow:'',cut:true,bold:true},
+  news:{n:'Jornal',color:'#111111',stroke:false,bg:false,font:'Playfair Display',glow:'',cut:true,bold:false},
   bebas:{n:'Alto e fino',color:'#ffffff',stroke:true,bg:false,font:'Bebas Neue',glow:'',cut:false,bold:true}
 };
 function newsToken(word,i,pal,active,upper){
   const h=hashStr(word+'#'+i),col=pal[i%pal.length];
-  return{t:upper?word.toUpperCase():word,cut:col,c:lum(col)>0.5?'#111111':'#ffffff',font:NEWS_FONTS[h%NEWS_FONTS.length],rot:((h%1000)/1000-0.5)*0.13,seed:h,sc:active?1.1:1};
+  return{t:upper?word.toUpperCase():word,cut:col,c:lum(col)>0.5?'#111111':'#ffffff',font:NEWS_FONTS[h%NEWS_FONTS.length],rot:((h%1000)/1000-0.5)*0.08,seed:h,sc:active?1.1:1};
 }
 function palOf(cs){const a=(cs.bgColors&&cs.bgColors.length?cs.bgColors:BG_PALETTES.jornal.c);return cs.bgMode==='single'?[a[0]]:a;}
 function buildCaption(ws,t,cs){
@@ -330,11 +330,11 @@ function buildCaption(ws,t,cs){
     if(pr.news2){
       const h=hashStr(w.w+'#'+i);let col=pal[i%pal.length];
       if(pr.news2===2)col=act?hi:pal[0];
-      return{t:up?w.w.toUpperCase():w.w,bg:col,box:1,c:lum(col)>0.5?'#111111':'#ffffff',font:NEWS_FONTS[h%NEWS_FONTS.length],trot:((h%1000)/1000-0.5)*0.11,sc:act?1.08:1};
+      return{t:up?w.w.toUpperCase():w.w,bg:col,box:1,c:lum(col)>0.5?'#111111':'#ffffff',font:NEWS_FONTS[h%NEWS_FONTS.length],trot:((h%1000)/1000-0.5)*0.06,sc:act?1.06:1};
     }
     if(pr.strip){
       const h=hashStr(w.w+'#'+i);
-      return{t:up?w.w.toUpperCase():w.w,c:lum(pal[0])>0.5?'#111111':'#ffffff',font:NEWS_FONTS[h%NEWS_FONTS.length],trot:((h%1000)/1000-0.5)*0.11,sc:act?1.08:1};
+      return{t:up?w.w.toUpperCase():w.w,c:lum(pal[0])>0.5?'#111111':'#ffffff',font:NEWS_FONTS[h%NEWS_FONTS.length],trot:((h%1000)/1000-0.5)*0.06,sc:act?1.06:1};
     }
     const tk={t:up?w.w.toUpperCase():w.w,c:dark?'#111111':(pr.colorHi?hi:base),sc:1};
     if(pr.wordBox)tk.bg='rgba(0,0,0,0.62)';
@@ -346,7 +346,7 @@ function buildCaption(ws,t,cs){
     }
     return tk;
   });
-  const opts={px:cs.size*(pr.single?1.35:1),font:(cs.font&&cs.font!=='auto')?cs.font:pr.font,bold:!pr.plain,color:base,stroke:pr.stroke||0,shadow:!!pr.shadow,glow:pr.glow?hi:null,
+  const opts={px:cs.size*(pr.single?1.35:1),font:(cs.font&&cs.font!=='auto')?cs.font:pr.font,bold:!(pr.plain||pr.news||pr.news2||pr.strip),normal:!!(pr.news||pr.news2||pr.strip),color:base,stroke:pr.stroke||0,shadow:!!pr.shadow,glow:pr.glow?hi:null,
     bg:pr.boxBg?'rgba(0,0,0,0.62)':(pr.bgHi?hi:(pr.strip?pal[0]:null)),y:cs.y,maxLines:pr.single?1:2,maxW:pr.news?0.88:0.82,offset3d:!!pr.retro};
   return{tokens,opts};
 }
@@ -360,7 +360,7 @@ function drawOverlays(ctx,W,H,t){
     else if(x.anim==='type'){txt=x.text.slice(0,Math.floor(x.text.length*Math.min(1,l/Math.max(0.3,Math.min(x.dur*0.6,2)))));}
     const tk=[],pal=palOf(S.capStyle);let wi=0;
     txt.split('\n').forEach((ln,i)=>{if(i)tk.push({t:'\n'});ln.split(/\s+/).filter(Boolean).forEach(w=>{tk.push(x.cut?newsToken(w,wi,pal,false,false):{t:w});wi++;});});
-    drawRich(ctx,W,H,tk,{px:x.size,font:x.font,bold:x.bold,color:x.color,bg:x.bg,stroke:x.stroke?1:0,shadow:!x.bg&&!x.stroke&&!x.cut,y:x.y,alpha,scale,dy,glow:x.glow||null,glowColor:x.glow||null});
+    drawRich(ctx,W,H,tk,{normal:!!x.cut,px:x.size,font:x.font,bold:x.bold&&!x.cut,color:x.color,bg:x.bg,stroke:x.stroke?1:0,shadow:!x.bg&&!x.stroke&&!x.cut,y:x.y,alpha,scale,dy,glow:x.glow||null,glowColor:x.glow||null});
   }
   const cs=S.capStyle,tt=t+(cs.offset||0);
   const seg=S.caps.find(s=>tt>=s.start&&tt<s.end);
@@ -380,7 +380,7 @@ function drawStyleThumb(cv,key){
 function drawTextThumb(cv,key){
   const ctx=thumbBg(cv),st=TEXT_STYLES[key],pal=palOf(S.capStyle);
   const tk=['Texto','novo'].map((w,i)=>st.cut?newsToken(w,i,pal,false,false):{t:w});
-  drawRich(ctx,cv.width,cv.height,tk,{px:90,font:st.font,bold:st.bold,color:st.color,bg:st.bg,stroke:st.stroke?1:0,shadow:!st.bg&&!st.stroke&&!st.cut,y:50,glow:st.glow||null,glowColor:st.glow||null,maxW:0.94});
+  drawRich(ctx,cv.width,cv.height,tk,{normal:!!st.cut,px:90,font:st.font,bold:st.bold&&!st.cut,color:st.color,bg:st.bg,stroke:st.stroke?1:0,shadow:!st.bg&&!st.stroke&&!st.cut,y:50,glow:st.glow||null,glowColor:st.glow||null,maxW:0.94});
 }
 let _tc=null,TH=null;
 function testCard(){

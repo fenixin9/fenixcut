@@ -48,7 +48,7 @@ let R=null,dirty=true;
 const invalidate=()=>{dirty=true;};
 function initRenderer(){
   if(R)R.dispose();
-  const[w,h]=dimsFor(480);const cv=$('preview');
+  const[w,h]=dimsFor(640);const cv=$('preview');
   R=createRenderer(w,h,cv);cv.style.aspectRatio=`${w}/${h}`;invalidate();
 }
 function renderScene(r,t,ovr){
@@ -164,9 +164,9 @@ function newText(){return{id:nid(),text:'Escreve aqui',start:S.t,dur:3,size:80,c
 /* ---------- timeline ---------- */
 function renderTimeline(){
   const pps=S.pps,W=Math.max(S.total,6)*pps+120;$('tlInner').style.width=W+'px';
-  let rl='';const step=pps>=80?1:pps>=40?2:5;
+  let rl='';const step=pps>=100?1:pps>=50?2:5;
   for(let s=0;s<=Math.max(S.total,6)+2;s+=step)rl+=`<span style="left:${s*pps}px">${s}s</span>`;
-  $('ruler').innerHTML=rl;
+  const rul=$('ruler');rul.innerHTML=rl;rul.style.setProperty('--pps',pps);rul.classList.toggle('half',pps>=90);
   const sel=S.sel,selId=sel?sel.id:(selClip()||{}).id;
   $('trClips').innerHTML=S.clips.map(c=>`<div class="blk clip${c.id===selId&&(!sel||sel.type==='clip')?' sel':''}" data-t="clip" data-id="${c.id}" style="left:${c.tStart*pps}px;width:${Math.max(8,c.dur*pps-2)}px"><span>${esc(c.name)}</span><small>${fmt(c.dur)}${c.speed!==1?' · '+c.speed+'×':''}</small></div>`).join('');
   $('trTexts').innerHTML=S.texts.map(x=>`<div class="blk text${sel&&sel.id===x.id?' sel':''}" data-t="text" data-id="${x.id}" style="left:${x.start*pps}px;width:${Math.max(8,x.dur*pps-2)}px"><span>${esc(x.text)}</span></div>`).join('');
