@@ -61,6 +61,12 @@
       <button class="icon" id="btnEnd" aria-label="Ir para o fim"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M17 5h2v14h-2zM15 12L5 5v14z"/></svg></button>
       <input id="zoom" class="zoomsl" type="range" min="0" max="100" value="28" aria-label="Zoom da timeline (até milissegundos)">
     </div>
+    <form id="seekForm" class="seekbar">
+      <label>Tempo <input id="seekClock" type="text" inputmode="decimal" placeholder="00:00:12.345" aria-label="Tempo em horas minutos segundos milissegundos"></label>
+      <label>ms <input id="seekMillis" type="number" min="0" step="1" placeholder="12345" aria-label="Tempo total em milissegundos"></label>
+      <button class="btn sm" type="submit">Ir</button>
+      <button class="btn sm" type="button" id="seekMinus">−1 ms</button><button class="btn sm" type="button" id="seekPlus">+1 ms</button>
+    </form>
     <div class="tlscroll" id="tlScroll">
       <div class="tlinner" id="tlInner">
         <div class="ruler" id="ruler"></div>

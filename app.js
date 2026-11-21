@@ -13,8 +13,27 @@ const ICON={
  plus:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
  mic:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>'
 };
-function fmtMs(t){t=Math.max(0,t);const m=Math.floor(t/60),s=t-m*60;return m+':'+s.toFixed(3).padStart(6,'0');}
-function parseTime(s){s=String(s).trim().replace(',','.');if(!s)return null;const p=s.split(':').map(Number);if(p.length>3||p.some(x=>isNaN(x)||x<0))return null;let t=0;for(const x of p)t=t*60+x;return t;}
+function fmtMs(t){
+ const ms=Math.max(0,Math.round((Number(t)||0)*1000));
+ return String(Math.floor(ms/3600000)).padStart(2,'0')+':'+String(Math.floor(ms/60000)%60).padStart(2,'0')+':'+String(Math.floor(ms/1000)%60).padStart(2,'0')+'.'+String(ms%1000).padStart(3,'0');
+}
+function parseTime(s){
+ const text=String(s).trim().replace(',','.');
+ if(!/^\d+(?::\d{1,2}){0,2}(?:\.\d{1,3})?$/.test(text))return null;
+ const p=text.split(':').map(Number);if(p.slice(1).some(x=>x>=60))return null;
+ return p.reduce((a,b)=>a*60+b,0);
+}
+function paintRuler(){
+ const pps=S.pps,sc=$('tlScroll'),r=$('ruler');if(!sc||!r)return;
+ const steps=[.001,.002,.005,.01,.02,.05,.1,.2,.5,1,2,5,10,30,60,120,300,600];
+ const step=steps.find(n=>n*pps>=95)||600;
+ const from=Math.max(0,sc.scrollLeft/pps-step),to=Math.min(Math.max(S.total,6)+2,(sc.scrollLeft+sc.clientWidth)/pps+step);
+ let html='';for(let i=Math.floor(from/step);i*step<=to;i++){const t=i*step;html+=`<span style="left:${t*pps}px">${fmtMs(t)}</span>`;}
+ r.innerHTML=html;r.classList.remove('half','tenth');
+ const minor=steps.find(n=>n*pps>=6)||step;
+ r.style.backgroundImage='repeating-linear-gradient(90deg,rgba(255,255,255,.45) 0,rgba(255,255,255,.45) 1px,transparent 1px,transparent '+(minor*pps)+'px)';
+ r.style.setProperty('--pps',pps);
+}
 const fmt=t=>{t=Math.max(0,t);const m=Math.floor(t/60),s=t-m*60;return `${m}:${s.toFixed(1).padStart(4,'0')}`;};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function toast(msg,ms=3500){const t=$('toast');t.textContent=msg;t.classList.add('on');clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('on'),ms);}
@@ -167,10 +186,7 @@ function newText(){return{id:nid(),text:'Escreve aqui',start:S.t,dur:3,size:80,c
 /* ---------- timeline ---------- */
 function renderTimeline(){
   const pps=S.pps,W=Math.max(S.total,6)*pps+120;$('tlInner').style.width=W+'px';
-  const steps=[0.05,0.1,0.2,0.5,1,2,5,10,30,60],step=steps.find(s=>s*pps>=62)||60,end=Math.max(S.total,6)+2,dec=step<0.1?2:(step<1?1:0);
-  let rl='';
-  for(let i=0;i*step<=end&&i<2600;i++){const s=i*step;const lab=step>=1?(s>=60?Math.floor(s/60)+':'+String(Math.round(s%60)).padStart(2,'0'):s+'s'):s.toFixed(dec)+'s';rl+=`<span style="left:${s*pps}px">${lab}</span>`;}
-  const rul=$('ruler');rul.innerHTML=rl;rul.style.setProperty('--pps',pps);rul.classList.toggle('half',pps>=90&&pps<300);rul.classList.toggle('tenth',pps>=300);
+  paintRuler();
   const sel=S.sel,selId=sel?sel.id:(selClip()||{}).id;
   $('trClips').innerHTML=S.clips.map(c=>`<div class="blk clip${c.id===selId&&(!sel||sel.type==='clip')?' sel':''}" data-t="clip" data-id="${c.id}" style="left:${c.tStart*pps}px;width:${Math.max(8,c.dur*pps-2)}px"><span>${esc(c.name)}</span><small>${fmt(c.dur)}${c.speed!==1?' · '+c.speed+'×':''}</small></div>`).join('');
   $('trTexts').innerHTML=S.texts.map(x=>`<div class="blk text${sel&&sel.id===x.id?' sel':''}" data-t="text" data-id="${x.id}" style="left:${x.start*pps}px;width:${Math.max(8,x.dur*pps-2)}px"><span>${esc(x.text)}</span></div>`).join('');
@@ -179,6 +195,7 @@ function renderTimeline(){
 }
 function bindTimeline(){
   const inner=$('tlInner'),ruler=$('ruler');let drag=false;
+  $('tlScroll').addEventListener('scroll',paintRuler,{passive:true});
   const at=e=>Math.max(0,(e.clientX-inner.getBoundingClientRect().left)/S.pps);
   ruler.addEventListener('pointerdown',e=>{drag=true;ruler.setPointerCapture(e.pointerId);setT(at(e));});
   ruler.addEventListener('pointermove',e=>{if(drag)setT(at(e));});
@@ -191,7 +208,7 @@ function bindTimeline(){
     setT(at(e));renderTimeline();
     if(b||prev)renderPanel();
   });
-  $('zoom').addEventListener('input',e=>{const sc=$('tlScroll'),keep=S.t*S.pps-sc.scrollLeft;S.pps=20*Math.pow(50,(+e.target.value)/100);renderTimeline();sc.scrollLeft=Math.max(0,S.t*S.pps-keep);});
+  $('zoom').addEventListener('input',e=>{const sc=$('tlScroll'),keep=S.t*S.pps-sc.scrollLeft;S.pps=20*Math.pow(6000,(+e.target.value)/100);renderTimeline();sc.scrollLeft=Math.max(0,S.t*S.pps-keep);});
 }
 
 /* ---------- painéis ---------- */
@@ -204,11 +221,12 @@ const AIS={prompt:'',say:'',log:[],busy:false};
 function renderPanel(){
   renderTabs();const b=$('panelBody');
   const fn={clip:pClip,fx:pFx,trans:pTrans,text:pText,caps:pCaps,ai:pAI,exp:pExp}[S.tab];
-  try{b.innerHTML=fn();bindPanel(b);}catch(e){logErr('painel: '+e.message);b.innerHTML=empty('Erro no painel: '+esc(e.message));}
+  try{b.innerHTML=fn();if(['fx','trans','text','caps'].includes(S.tab)){b.insertAdjacentHTML('afterbegin',`<div class="btnrow"><button class="btn" id="galleryMotion">${CFG.galleryMotion===false?'Reproduzir':'Pausar'} miniaturas</button><small class="hint">Demonstrações animadas</small></div>`);$('galleryMotion').onclick=()=>{CFG.galleryMotion=CFG.galleryMotion===false;saveCFG();renderPanel();};}bindPanel(b);}catch(e){logErr('painel: '+e.message);b.innerHTML=empty('Erro no painel: '+esc(e.message));}
   if(S.tab==='exp')probeExport();
   drawGalleries();
 }
 function drawGalleries(){
+  thumbT0=performance.now();
   const c=selClip();
   document.querySelectorAll('canvas[data-style]').forEach(cv=>{try{drawStyleThumb(cv,cv.dataset.style,0.9);}catch(e){}});
   document.querySelectorAll('canvas[data-tstyle]').forEach(cv=>{try{drawTextThumb(cv,cv.dataset.tstyle,0.9);}catch(e){}});
@@ -222,10 +240,10 @@ function startThumbAnim(){
   thumbT0=performance.now();let last=0;
   const loop=now=>{
     thumbAnim=requestAnimationFrame(loop);
-    if(now-last<66||document.hidden||S.exporting)return;last=now;
+    if(now-last<100||document.hidden||S.exporting)return;last=now;
     const cvs=document.querySelectorAll('canvas[data-fxp],canvas[data-trp],canvas[data-tstyle],canvas[data-style]');
     if(!cvs.length){cancelAnimationFrame(thumbAnim);thumbAnim=null;return;}
-    if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+    if(CFG.galleryMotion===false||(CFG.galleryMotion!==true&&matchMedia('(prefers-reduced-motion: reduce)').matches))return;
     const box=$('panelBody').getBoundingClientRect(),t=(now-thumbT0)/1000,c=selClip();
     cvs.forEach(cv=>{
       const r=cv.getBoundingClientRect();if(!r.width||r.bottom<box.top||r.top>box.bottom)return;
@@ -260,7 +278,7 @@ function pFx(){
 }
 function pTrans(){
   const c=selClip();if(!c)return empty('Importa um vídeo para escolher transições.');
-  return `<p class="hint">A transição aplica-se ao início do clipe selecionado (entrada). As miniaturas mostram o efeito a meio.</p>
+  return `<p class="hint">A transição aplica-se ao início do clipe selecionado (entrada). As miniaturas repetem uma demonstração animada da entrada.</p>
   <div class="fxgrid">${Object.entries(TRANS).map(([k,n])=>`<button class="fxcard ${c.trans.type===k?'on':''}" data-trans="${k}" aria-label="${n}"><canvas data-trp="${k}" width="128" height="128"></canvas><span>${n}</span></button>`).join('')}</div>
   ${rng('trans','dur','Duração',0.2,2,0.05,c.trans.dur,v=>(+v).toFixed(2)+'s')}
   <div class="btnrow"><button class="btn" data-act="transall">Aplicar a todos os clipes</button></div>`;
@@ -306,12 +324,12 @@ function pCaps(){
   <div class="box"><h3>Legendas automáticas</h3>
   <label class="fld">Motor<select id="aiEngine"><option value="groq" ${eng==='groq'?'selected':''}>Nuvem Groq (rápido e preciso, recomendado)</option><option value="openai" ${eng==='openai'?'selected':''}>Nuvem OpenAI</option><option value="local" ${eng==='local'?'selected':''}>No aparelho (grátis, mais lento)</option></select></label>
   <label class="fld" id="keyWrap">Chave API <input type="password" id="aiKey" autocomplete="off" placeholder="gsk_… (Groq) ou sk-… (OpenAI)" value="${esc(CFG['key_'+eng]||'')}"></label>
-  <p class="hint" id="engHint"></p>
+  <p class="hint" id="engHint"></p><p class="hint">Transcrição: Whisper. Os restantes modelos Groq revêm o texto e executam prompts; não ouvem o áudio. O início é verificado numa passagem adicional quando necessário.</p>
   <div class="row2"><label class="fld">Idioma<select id="aiLang">${L.map(([k,n])=>`<option value="${k}" ${lang===k?'selected':''}>${n}</option>`).join('')}</select></label>
   <label class="fld">Palavras por legenda<input type="number" id="aiMax" min="1" max="10" value="${CFG.max||3}"></label></div>
   <label class="fld">Ortografia (correção)<select id="aiVar"><option value="pt" ${variant==='pt'?'selected':''}>Português de Portugal (PT-PT)</option><option value="br" ${variant==='br'?'selected':''}>Português do Brasil</option><option value="keep" ${variant==='keep'?'selected':''}>Manter como foi dito</option></select></label>
   <label class="fld" id="cmWrap">Modelo de transcrição (Groq)<select id="aiCM">${sttOptions().map(m=>`<option value="${m}" ${(CFG.cm||'whisper-large-v3')===m?'selected':''}>${m}</option>`).join('')}</select></label>
-  <label class="fld" id="chatWrap">Modelo de IA para correção e edição<select id="aiChat"><option value="auto">Automático (melhor disponível)</option>${chatOptions().map(m=>`<option value="${m}" ${CFG.chat===m?'selected':''}>${m}</option>`).join('')}</select></label>
+  <label class="fld" id="chatWrap">Modelo de linguagem — revisão e edição (não transcreve áudio)<select id="aiChat"><option value="auto">Automático (melhor disponível)</option>${chatOptions().map(m=>`<option value="${m}" ${CFG.chat===m?'selected':''}>${m}</option>`).join('')}</select></label>
   <button class="btn" data-act="models">Atualizar lista de modelos da Groq</button>
   <label class="fld" id="modelWrap">Modelo local<select id="aiModel"><option value="Xenova/whisper-tiny">Tiny (rápido, menos preciso)</option><option value="Xenova/whisper-base" selected>Base (equilibrado)</option><option value="Xenova/whisper-small">Small (melhor, lento)</option></select></label>
   <label class="fld">Nomes/palavras difíceis (ajuda muito)<input type="text" id="aiPrompt" placeholder="ex.: Pinhal Novo, Pladur, FenixCut" value="${esc(CFG.prompt||'')}"></label>
@@ -323,7 +341,7 @@ function pCaps(){
   <li>Vai a <a href="https://console.groq.com/keys" target="_blank" rel="noopener">API Keys</a> → Create API Key → copia a chave (começa por gsk_).</li>
   <li>Aqui, em Motor escolhe "Nuvem Groq", cola a chave e escolhe "Whisper Large V3".</li>
   <li>Idioma: Português. Em "Nomes difíceis" escreve nomes próprios e termos técnicos.</li>
-  <li>Carrega em Gerar legendas. Plano grátis: ficheiros até 25 MB por pedido (a app já divide em partes de 10 min), cerca de 2 h de áudio por hora e 8 h por dia.</li>
+  <li>Carrega em Gerar legendas. A app divide o áudio em janelas curtas com sobreposição. Os limites dependem da tua conta; a verificação do início pode acrescentar um pedido.</li>
   <li>Se aparecer "Limite atingido", espera 1 minuto e repete.</li></ol></details>
   <button class="btn wide" data-act="cfglink">Copiar link para configurar outro aparelho</button></div>
   <div class="btnrow"><button class="btn" data-act="addcap">${ICON.plus} Legenda aqui</button><button class="btn" data-act="capm">−0,1s todas</button><button class="btn" data-act="capp">+0,1s todas</button></div>
@@ -345,7 +363,7 @@ function pAI(){
 const EXP={res:1080,fps:30,q:'high',audio:true,method:'auto',codec:'auto',mbps:0,bm:'constant',cancel:false,busy:false,support:{},result:null};
 function pExp(){
   const rs=RES_LIST.map(([n,s])=>{const[w,h]=dimsFor(s);return `<label class="radio"><input type="radio" name="res" value="${s}" ${EXP.res===s?'checked':''}><span>${n}<small>${w}×${h}</small></span><em id="sup${s}">…</em></label>`;}).join('');
-  return `<div class="box"><h3>Resolução</h3><div class="radios">${rs}</div>
+  return `<div class="box"><h3>Resolução</h3><p class="hint">${S.clips.map(c=>`${esc(c.name)}: ${SRC[c.src].vw}×${SRC[c.src].vh}`).join('<br>')}<br>2K/4K amplia a imagem; não é super-resolução por IA.</p><div class="radios">${rs}</div>
   <div class="row2"><label class="fld">Imagens/seg<select id="expFps"><option ${EXP.fps===24?'selected':''}>24</option><option ${EXP.fps===30?'selected':''}>30</option><option ${EXP.fps===60?'selected':''}>60</option></select></label>
   <label class="fld">Qualidade<select id="expQ"><option value="normal" ${EXP.q==='normal'?'selected':''}>Normal</option><option value="high" ${EXP.q==='high'?'selected':''}>Alta</option><option value="max" ${EXP.q==='max'?'selected':''}>Máxima</option></select></label></div>
   <label class="fld">Método<select id="expMethod"><option value="auto">Automático (rápido, com alternativas)</option><option value="rt">Compatível (tempo real)</option></select></label>
@@ -370,7 +388,6 @@ async function probeExport(){
   }
 }
 async function doExport(){
-  if(EXP.busy)return;
   if(!S.clips.length)return toast('Importa um vídeo primeiro.');
   pause();EXP.cancel=false;EXP.busy=true;S.exporting=true;
   const[w,h]=dimsFor(EXP.res),fps=EXP.fps,bitrate=bitrateFor(w,h,fps,EXP.q);
@@ -382,7 +399,7 @@ async function doExport(){
     EXP.result={url:URL.createObjectURL(out.blob),blob:out.blob,ext:out.ext,w,h};
     const name=`fenixcut-${w}x${h}.${out.ext}`;
     if($('expRes')){
-      $('expRes').innerHTML=`<div class="box"><h3>Pronto: ${w}×${h} · ${(out.blob.size/1048576).toFixed(1)} MB</h3><p class="hint">${out.info?`Método: ${esc(out.info.method)} · Codec: ${esc(String(out.info.codec))} · Débito vídeo pedido: ${(out.info.bitrate/1e6).toFixed(1)} Mbps · Média real do ficheiro (vídeo + áudio): ${out.info.averageMbps==null?'indisponível':out.info.averageMbps.toFixed(1)+' Mbps'} · Resolução verificada: ${out.info.width}×${out.info.height}`:''}</p><video controls playsinline src="${EXP.result.url}" class="resvid"></video>
+      $('expRes').innerHTML=`<div class="box"><h3>Pronto: ${w}×${h} · ${(out.blob.size/1048576).toFixed(1)} MB</h3><p class="hint">${out.info?`Método: ${esc(out.info.method)} · Codec: ${esc(String(out.info.codec))} · Pedido: ${(out.info.bitrate/1e6).toFixed(1)} Mbps · Média real do ficheiro: ${out.info.averageMbps==null?'indisponível':out.info.averageMbps.toFixed(1)+' Mbps'} (vídeo + áudio) · Resolução confirmada: ${out.info.width}×${out.info.height}`:''}</p><video controls playsinline src="${EXP.result.url}" class="resvid"></video>
       <div class="btnrow"><a class="btn primary" href="${EXP.result.url}" download="${name}">Descarregar</a><button class="btn" id="expShare">Partilhar / guardar na galeria</button></div></div>`;
       $('expShare').onclick=async()=>{try{const f=new File([out.blob],name,{type:out.blob.type});if(navigator.canShare&&navigator.canShare({files:[f]}))await navigator.share({files:[f]});else toast('Partilha não suportada. Usa Descarregar.');}catch(e){}};
     }
@@ -413,9 +430,17 @@ function capOpts(){
   const engine=CFG.engine||'groq';
   return{engine,key:(CFG['key_'+engine]||'').trim(),cloudModel:CFG.cm||'whisper-large-v3',fix:CFG.fix!==false,lang:CFG.lang==null?'pt':CFG.lang,model:CFG.model||'Xenova/whisper-base',maxWords:Math.max(1,CFG.max||3),prompt:CFG.prompt||'',variant:CFG.variant||'pt'};
 }
+let CAPTIONS_BUSY=false;
 async function genCaptions(st){
-  const segs=await autoCaptions(capOpts(),st);
-  S.caps=segs;commit();refreshAll();toast(`${segs.length} legendas geradas. Corrige o que for preciso.`);
+ if(CAPTIONS_BUSY)throw new Error('Uma transcrição já está em curso.');
+ CAPTIONS_BUSY=true;const signature=JSON.stringify(S.clips);
+ const buttons=[...document.querySelectorAll('[data-act="autocap"]')];buttons.forEach(b=>b.disabled=true);
+ try{
+   const segs=await autoCaptions(capOpts(),st);
+   if(signature!==JSON.stringify(S.clips))throw new Error('O vídeo foi alterado durante a transcrição. Gera novamente para alinhar com a nova edição.');
+   if(!segs.length)throw new Error('Sem legendas; o resultado anterior foi mantido.');
+   S.caps=segs;commit();refreshAll();toast(`${segs.length} legendas geradas. Revê o início e as palavras difíceis.`);
+ }finally{CAPTIONS_BUSY=false;buttons.forEach(b=>b.disabled=false);}
 }
 
 function target(sc){
@@ -564,3 +589,20 @@ function init(){
   if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
 window.addEventListener('DOMContentLoaded',init);
+
+window.addEventListener('DOMContentLoaded',()=>{
+ const clock=$('seekClock'),ms=$('seekMillis'),form=$('seekForm');let last='clock';
+ clock.addEventListener('input',()=>{last='clock';});ms.addEventListener('input',()=>{last='ms';});
+ form.onsubmit=e=>{e.preventDefault();const value=last==='ms'?(ms.value.trim()!==''?Number(ms.value)/1000:null):parseTime(clock.value);
+ if(value===null||!Number.isFinite(value)||value<0){toast('Usa hh:mm:ss.mmm ou milissegundos inteiros.');return;}
+ if(value>S.total){toast('O tempo indicado ultrapassa o fim do projeto.');return;}
+ pause();setT(value);clock.value=fmtMs(value);ms.value=String(Math.round(value*1000));
+ const sc=$('tlScroll');sc.scrollLeft=Math.max(0,value*S.pps-sc.clientWidth/2);paintRuler();};
+ for(const [id,dt]of [['seekMinus',-.001],['seekPlus',.001]])$(id).onclick=()=>{pause();setT(Math.max(0,Math.min(S.total,Math.round((S.t+dt)*1000)/1000)));clock.value=fmtMs(S.t);ms.value=Math.round(S.t*1000);};
+});
+
+window.addEventListener('DOMContentLoaded',()=>{
+ const wrap=document.querySelector('.canvasWrap'),cv=$('preview');
+ const fit=()=>{const rect=wrap.getBoundingClientRect(),ar=cv.width/cv.height,w=Math.max(1,rect.width-8),h=Math.max(1,rect.height-8),width=Math.min(w,h*ar);cv.style.width=width+'px';cv.style.height=width/ar+'px';};
+ const ro=new ResizeObserver(fit);ro.observe(wrap);new MutationObserver(fit).observe(cv,{attributes:true,attributeFilter:['width','height']});fit();
+});

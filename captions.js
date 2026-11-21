@@ -18,11 +18,13 @@ const _modelCache={};
 async function chatModels(o){
   const P=CLOUD[o.engine];
   const pick=(typeof CFG!=='undefined'&&CFG.chat&&CFG.chat!=='auto')?[CFG.chat]:[];
-  if(_modelCache[o.engine])return pick.concat(_modelCache[o.engine].filter(m=>m!==pick[0]));
+  if(pick.length)return pick;
+  if(_modelCache[o.engine])return _modelCache[o.engine];
   let ids=[];
   try{const r=await fetch(P.models,{headers:{Authorization:'Bearer '+o.key}});if(r.ok){const j=await r.json();ids=(j.data||[]).map(m=>m.id);}else if(r.status===401)throw new Error('Chave API inválida.');}
   catch(e){if(e.message==='Chave API inválida.')throw e;}
   let list=P.pref.filter(m=>!ids.length||ids.includes(m));
+  const others=ids.filter(m=>!NOT_CHAT.test(m)&&!list.includes(m));list=list.concat(others);
   if(!list.length)list=P.pref;
   _modelCache[o.engine]=list;return pick.concat(list.filter(m=>m!==pick[0]));
 }
@@ -54,55 +56,67 @@ async function listModels(o){
   const r=await fetch(P.models,{headers:{Authorization:'Bearer '+o.key}});
   if(!r.ok)throw new Error(r.status===401?'Chave API inválida.':'Erro '+r.status);
   const j=await r.json(),ids=(j.data||[]).map(m=>m.id).sort();
-  CFG.modelIds=ids;CFG.modelsAt=Date.now();saveCFG();return ids;
+  CFG.modelIds=ids;CFG.modelsEngine=o.engine;CFG.modelsAt=Date.now();delete _modelCache[o.engine];saveCFG();return ids;
 }
-const sttOptions=()=>{const a=(CFG.modelIds||[]).filter(x=>/whisper|transcribe|stt/i.test(x));return a.length?a:['whisper-large-v3','whisper-large-v3-turbo'];};
-const chatOptions=()=>(CFG.modelIds||[]).filter(x=>!NOT_CHAT.test(x));
+const sttOptions=()=>CFG.engine==='openai'?['whisper-1']:['whisper-large-v3','whisper-large-v3-turbo'];
+const chatOptions=()=>{
+ const engine=CFG.engine==='openai'?'openai':'groq';
+ const ids=CFG.modelsEngine&&CFG.modelsEngine!==engine?[]:(CFG.modelIds||[]);
+ return [...new Set([...(CLOUD[engine].pref),...ids.filter(x=>!NOT_CHAT.test(x))])];
+};
 function normalizeAudio(a){
-  let pk=0;for(let i=0;i<a.length;i+=8){const v=Math.abs(a[i]);if(v>pk)pk=v;}
-  if(pk<0.02||pk>0.7)return a;
-  const g=Math.min(0.9/pk,10),o=new Float32Array(a.length);
-  for(let i=0;i<a.length;i++)o[i]=Math.max(-1,Math.min(1,a[i]*g));
-  return o;
+ let pk=0;for(const v of a)pk=Math.max(pk,Math.abs(v));
+ if(pk<.003||pk>.8)return new Float32Array(a);
+ const g=Math.min(.85/pk,3),r=new Float32Array(a.length);for(let i=0;i<a.length;i++)r[i]=a[i]*g;return r;
 }
 function whisperPrompt(o){
   /* sem frase-modelo: o Whisper pode repeti-la/perder o início. Só vocabulário. */
   return o.prompt?('Vocabulário: '+o.prompt+'.').slice(0,500):'';
 }
 async function cloudASR(audio,o,status){
-  const P=CLOUD[o.engine];if(!o.key)throw new Error('Cola a chave API da '+P.label+'.');
-  const model=o.engine==='openai'?'whisper-1':(o.cloudModel||'whisper-large-v3');
-  status('Modelo: '+model+' · a enviar áudio…');
-  const sr=16000,CH=600*sr,words=[],prompt=whisperPrompt(o);
-  for(let off=0,i=0;off<audio.length;off+=CH,i++){
-    status(`A enviar áudio para ${P.label} (parte ${i+1}/${Math.ceil(audio.length/CH)})…`);
-    const wav=encodeWav(audio.subarray(off,off+CH),sr);
-    const fd=new FormData();
-    fd.append('file',new File([wav],'audio.wav',{type:'audio/wav'}));
-    fd.append('model',model);fd.append('response_format','verbose_json');
-    fd.append('timestamp_granularities[]','word');fd.append('timestamp_granularities[]','segment');
-    fd.append('temperature','0');
-    if(o.lang)fd.append('language',o.lang);
-    if(prompt)fd.append('prompt',prompt);
-    let r;
-    try{r=await fetch(P.url,{method:'POST',headers:{Authorization:'Bearer '+o.key},body:fd});}
-    catch(e){throw new Error('Sem ligação ao serviço '+P.label+' (rede ou bloqueio do navegador).');}
-    if(!r.ok){const tx=(await r.text()).slice(0,200);throw new Error(r.status===401?'Chave API inválida.':r.status===429?'Limite do Groq atingido (aguarda um pouco).':`Erro ${r.status}: ${tx}`);}
-    const j=await r.json(),base=off/sr;
-    const bad=(j.segments||[]).filter(s=>(s.no_speech_prob>0.9&&s.avg_logprob<-1.3)||s.compression_ratio>3.5);
-    const isBad=t=>bad.some(s=>t>=s.start-0.05&&t<=s.end+0.05);
-    const cw=[];
-    if(j.words&&j.words.length)j.words.forEach(w=>{const t=String(w.word).trim();if(t&&!isBad(w.start))cw.push({w:t,s:w.start+base,e:w.end+base});});
-    /* cobertura: segmentos sem palavras (ex.: início do vídeo) entram a partir do texto do segmento */
-    (j.segments||[]).filter(s=>!bad.includes(s)).forEach(sg=>{
-      const a=sg.start+base,b2=sg.end+base;
-      if(cw.some(w=>w.s>=a-0.1&&w.s<b2-0.05))return;
-      const ws=String(sg.text).trim().split(/\s+/).filter(Boolean);if(!ws.length)return;
-      const d=(b2-a)/ws.length;ws.forEach((w,k)=>cw.push({w,s:a+k*d,e:a+(k+1)*d}));
-    });
-    cw.sort((p,q)=>p.s-q.s);words.push(...cw);
-  }
-  return words;
+ const P=CLOUD[o.engine];if(!P||!o.key)throw new Error('Falta a chave do serviço de transcrição.');
+ const model=o.engine==='openai'?'whisper-1':(o.cloudModel||'whisper-large-v3');
+ if(o.engine==='groq'&&!['whisper-large-v3','whisper-large-v3-turbo'].includes(model))throw new Error('Esse modelo não é um transcritor de áudio Groq. Escolhe um dos Whisper; os restantes modelos são para revisão.');
+ const sr=16000,hop=28,windowS=30,prefix=.6,duration=audio.length/sr;
+ async function request(start,end){
+   const pcm=new Float32Array(Math.round(prefix*sr)+(end-start)+Math.round(.2*sr));pcm.set(audio.subarray(start,end),Math.round(prefix*sr));
+   const fd=new FormData();fd.append('file',new File([encodeWav(pcm,sr)],'audio.wav',{type:'audio/wav'}));fd.append('model',model);fd.append('response_format','verbose_json');
+   fd.append('timestamp_granularities[]','word');fd.append('timestamp_granularities[]','segment');fd.append('temperature','0');
+   if(o.lang)fd.append('language',o.lang);if(whisperPrompt(o))fd.append('prompt',whisperPrompt(o));
+   const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),120000);let response;
+   try{response=await fetch(P.url,{method:'POST',headers:{Authorization:'Bearer '+o.key},body:fd,signal:ctrl.signal});}
+   catch(err){throw new Error(err.name==='AbortError'?'A transcrição excedeu 2 minutos.':'Falha de rede na transcrição.');}finally{clearTimeout(timer);}
+   if(!response.ok)throw new Error('Transcrição '+response.status+': '+(await response.text()).slice(0,160));
+   const j=await response.json(),base=start/sr-prefix,words=[];
+   for(const w of j.words||[]){const text=String(w.word||'').trim(),s=Number(w.start)+base,e=Number(w.end)+base;
+     if(text&&Number.isFinite(s)&&Number.isFinite(e)&&e>0&&s<duration)words.push({w:text,s:Math.max(0,s),e:Math.min(duration,Math.max(s+.01,e))});}
+   for(const seg of j.segments||[]){
+     const s=Math.max(0,seg.start+base),e=Math.min(duration,seg.end+base);
+     if(e<=s||words.some(w=>w.s<e&&w.e>s))continue;
+     if(seg.no_speech_prob>.98&&seg.avg_logprob<-2)continue;
+     const ws=String(seg.text||'').trim().split(/\s+/).filter(Boolean);
+     ws.forEach((w,k)=>words.push({w,s:s+(e-s)*k/ws.length,e:s+(e-s)*(k+1)/ws.length,approx:true}));
+   }
+   return words.sort((a,b)=>a.s-b.s);
+ }
+ const all=[];
+ for(let off=0,n=0;off<audio.length;off+=hop*sr,n++){
+   const begin=off/sr,start=Math.max(0,off-sr),end=Math.min(audio.length,off+(hop+1)*sr),last=end===audio.length;
+   status(`A transcrever desde ${begin.toFixed(1)} s — janela ${n+1}/${Math.ceil(duration/hop)} (${model})`);
+   const ws=await request(start,end),ownEnd=last?duration:begin+hop;
+   all.push(...ws.filter(w=>{const mid=(w.s+w.e)/2;return mid>=begin&&mid<ownEnd;}));
+   if(last)break;
+ }
+ all.sort((a,b)=>a.s-b.s);
+ // Retry the opening with a short independent context when recognition starts late.
+ if(!all.length||all[0].s>.35||duration>8){
+   status('A verificar novamente o início do áudio…');
+   const early=await request(0,Math.min(audio.length,8*sr));
+   const first=all.length?all[0].s:duration,cut=Math.max(0,first-.08);
+   const extra=early.filter(w=>w.e<=cut);
+   all.unshift(...extra);all.sort((a,b)=>a.s-b.s);
+ }
+ return all;
 }
 function localASR(audio,o,status){
   return new Promise((res,rej)=>{
@@ -203,6 +217,7 @@ async function autoCaptions(o,status){
   if(!words.length)throw new Error('Não foi detetada fala.');
   const segs=groupWords(words,o);
   status(`Primeira palavra aos ${words[0].s.toFixed(2)} s · ${words.length} palavras.`);
+  if(words.some(w=>w.approx))status('Alguns tempos foram estimados por segmento; revê a sincronização.');
   if(o.engine!=='local'&&o.fix){const n=await aiFix(segs,o,status);status(`Pronto. ${n} legendas corrigidas pela IA.`);}
   return segs;
 }

@@ -128,3 +128,16 @@ body[data-focus="1"]{--ph:46px}body[data-focus="1"] .pbody{display:none}
 .tlbar .zoomsl{flex:1;max-width:260px;width:auto!important;margin:0 0 0 auto}
 .ruler.tenth{background-image:repeating-linear-gradient(90deg,rgba(255,255,255,.45) 0,rgba(255,255,255,.45) 1px,transparent 1px,transparent calc(var(--pps,60)*1px)),repeating-linear-gradient(90deg,rgba(255,255,255,.3) 0,rgba(255,255,255,.3) 1px,transparent 1px,transparent calc(var(--pps,60)*.5px)),repeating-linear-gradient(90deg,rgba(255,255,255,.22) 0,rgba(255,255,255,.22) 1px,transparent 1px,transparent calc(var(--pps,60)*.1px));background-size:100% 9px,100% 6px,100% 4px}
 @media(max-width:480px){.timein{width:92px;font-size:14px}#timeTot{display:none}}
+
+.seekbar{display:flex;align-items:end;gap:5px;padding:4px 8px;flex-wrap:wrap;border-bottom:1px solid var(--bd)}
+.seekbar label{font-size:11px;color:var(--mu);flex:1;min-width:85px}.seekbar input{display:block;width:100%;padding:5px;font-size:14px;font-variant-numeric:tabular-nums}.seekbar label:first-child{flex:1.5;min-width:125px}.seekbar .btn{min-height:32px;padding:0 8px;font-size:12px}
+.ruler span{font-size:10px;white-space:nowrap}
+@media(max-width:480px){.seekbar label:first-child{min-width:113px}.seekbar label{min-width:62px}.seekbar .btn{padding:0 5px}}
+
+.timein{width:125px!important;font-size:13px!important}.transport{flex-wrap:wrap}
+
+.canvasWrap{overflow:hidden;min-width:0}#preview{position:absolute;max-width:none;max-height:none}.transport{flex-shrink:0}
+.tl{display:flex;flex-direction:column;min-height:0}.tlscroll{flex:1;min-height:50px}.tlbar,.seekbar{flex-shrink:0}
+
+.seekbar{flex-wrap:nowrap;overflow-x:auto;align-items:center}.seekbar label{flex:0 0 74px}.seekbar label:first-child{flex:0 0 122px}.seekbar .btn{flex:none}
+@media(max-height:700px) and (orientation:portrait){body[data-panel=md]{--ph:22%}.transport .icon{width:36px;height:36px}.transport .sp{display:none}.transport{gap:0}.tlscroll{height:94px}.tlbar{height:28px}}

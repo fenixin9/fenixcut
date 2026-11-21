@@ -1,5 +1,5 @@
 
-const V='fenixcut-v8-fix1';
+const V='fenixcut-v9-fix1';
 const SHELL=['./','./index.html','./style.css','./fx.js','./export.js','./captions.js','./ai.js','./app.js','./project.js','./asr-worker.js','./manifest.json','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(V).then(c=>c.addAll(SHELL)));self.skipWaiting();});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x.startsWith('fenixcut-')&&x!==V).map(x=>caches.delete(x)))).then(()=>self.clients.claim()));});

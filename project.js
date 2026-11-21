@@ -47,28 +47,14 @@ function buildRecord(){
 }
 let saveQueue=Promise.resolve(),saveRevision=0;
 function saveNow(){
-  if(!P.id)return Promise.resolve(true);
-  clearTimeout(P.timer);
-  const revision=++saveRevision,rec=buildRecord();
-  const files=Object.values(SRC).filter(s=>!s.saved).map(s=>({source:s,key:rec.id+':'+s.id,blob:s.file,name:s.name,type:s.file.type}));
-  setSaveState('saving');
-  const task=saveQueue.then(async()=>{
-    P.busy=true;
-    try{
-      const db=await idb();
-      await new Promise((resolve,reject)=>{
-        const t=db.transaction(['files','projects'],'readwrite');
-        for(const f of files)t.objectStore('files').put({key:f.key,blob:f.blob,name:f.name,type:f.type});
-        t.objectStore('projects').put(rec);
-        t.oncomplete=resolve;t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error||new Error('Gravação interrompida'));
-      });
-      for(const f of files)f.source.saved=true;
-      if(revision===saveRevision&&P.id===rec.id)setSaveState('saved');
-      return true;
-    }catch(err){logErr('guardar: '+err.message);setSaveState('error',err.name==='QuotaExceededError'?'sem espaço no aparelho':err.message);return false;}
-    finally{P.busy=false;}
-  });
-  saveQueue=task.then(()=>{},()=>{});return task;
+ if(!P.id)return Promise.resolve(true);clearTimeout(P.timer);
+ const rev=++saveRevision,rec=buildRecord(),files=Object.values(SRC).filter(s=>!s.saved).map(s=>({source:s,key:rec.id+':'+s.id,blob:s.file,name:s.name,type:s.file.type}));
+ setSaveState('saving');
+ const task=saveQueue.then(async()=>{P.busy=true;try{
+   const db=await idb();await new Promise((res,rej)=>{const t=db.transaction(['files','projects'],'readwrite');for(const f of files)t.objectStore('files').put({key:f.key,blob:f.blob,name:f.name,type:f.type});t.objectStore('projects').put(rec);t.oncomplete=res;t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error||new Error('Gravação interrompida'));});
+   files.forEach(f=>f.source.saved=true);if(rev===saveRevision&&P.id===rec.id)setSaveState('saved');return true;
+ }catch(e){logErr('guardar: '+e.message);setSaveState('error',e.message);return false;}finally{P.busy=false;}});
+ saveQueue=task.then(()=>{},()=>{});return task;
 }
 async function loadSrc(file,id,saved){
   const url=URL.createObjectURL(file),v=document.createElement('video');
@@ -88,7 +74,7 @@ function clearProject(){
 }
 async function newProject(){
   if(S.exporting){toast('Aguarda o fim da exportação.');return;}
-  if(!await saveNow()){toast('Não foi possível guardar. O projeto atual foi mantido.');return;}clearProject();
+  if(!await saveNow()){toast('Falhou guardar. O projeto foi mantido.');return;}clearProject();
   P.id=null;P.named=false;P.name='Projeto '+new Date().toLocaleDateString('pt-PT');P.created=0;
   $('projName').value=P.name;S.ratio=[9,16];$('ratio').value='9:16';initRenderer();
   try{localStorage.removeItem('fenixcut_last');}catch(e){}
@@ -97,7 +83,7 @@ async function newProject(){
 async function openProject(id,quiet){
   if(S.exporting){toast('Aguarda o fim da exportação.');return;}
   try{
-    if(P.id&&!await saveNow())throw new Error('O projeto atual não foi guardado; abertura cancelada.');
+    if(P.id&&!await saveNow())throw new Error('Falhou guardar o projeto atual');
     const rec=await idbGet('projects',id);if(!rec)throw new Error('projeto não encontrado');
     clearProject();
     const missing=[];
@@ -160,7 +146,7 @@ async function renderSheet(){
   box.querySelectorAll('[data-bk]').forEach(b=>b.onclick=()=>exportBackup(b.dataset.bk));
 }
 function applyViewport(){
-  const vv=window.visualViewport,h=vv?vv.height:window.innerHeight;
+  const vv=window.visualViewport,h=vv?Math.min(vv.height,window.innerHeight):window.innerHeight;
   document.documentElement.style.setProperty('--appH',Math.round(h)+'px');
   invalidate();
 }

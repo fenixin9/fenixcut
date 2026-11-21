@@ -1,25 +1,24 @@
-# FenixCut — V8 correções
+# FenixCut V9
 
-## Instalar
-Substitui TODOS os ficheiros na raiz do repositório pelos deste ZIP. Não substituas só export.js. Mantém o GitHub Pages ativo. Fecha a PWA, abre o site no navegador e recarrega. Cache: fenixcut-v8-fix1.
-NÃO apagues os dados do site: isso pode eliminar os projetos e os vídeos guardados em IndexedDB. Os ficheiros de código e o cache offline são diferentes dos dados dos projetos.
+## Atualizar
+Substitui os ficheiros correspondentes na raiz do repositório por TODOS os ficheiros deste ZIP. Fecha a PWA, abre o site e recarrega. Cache: fenixcut-v9-fix1.
+Não apagues os dados do site: os projetos/vídeos estão em IndexedDB e podem ser eliminados. A atualização do código e do cache não exige apagar esses dados.
 
-## Corrigido
-- PNG verdadeiros com os nomes e dimensões do manifesto.
-- Cache offline versionado; limpeza limitada aos caches fenixcut-*.
-- Gravações de projetos em fila, com snapshot e transação conjunta para ficheiros e metadados.
-- Falhas de gravação impedem abrir um projeto diferente ou criar um novo por cima do atual.
-- Áudio do modo tempo real usa elementos e AudioContext próprios em cada operação. Liberta pistas, vídeos e contexto ao terminar/cancelar.
-- Codec explícito nunca é trocado silenciosamente. HEVC exige o motor principal; alternativa H.264 apenas quando escolhido ou em Automático.
-- O modo Automático não cai silenciosamente para gravação em tempo real. Em caso de falha, pede escolher Compatível.
-- Exportação valida dimensões do vídeo gerado e, quando disponível, duração. Mostra débito pedido e média real do ficheiro (inclui áudio e contentor).
-- Sem reforço artificial de nitidez por defeito. Usa a origem, não o canvas reduzido do preview.
-- Frames de origem ausentes e timeout de procura geram erro em vez de repetir frames silenciosamente.
-- Todos os modos de legendas de jornal com palavras/caixas usam peso normal e caixa reta. Inclinação reduzida a cerca de 1,15 graus. Fita mantém fundo em faixa.
-- Mantido tema magenta, responsividade, foco e régua com subdivisões.
+## Novidades
+- Régua com hh:mm:ss.mmm; zoom até marcas de 1 ms (dependendo do nível). Só desenha os rótulos da região visível.
+- Campos Tempo (hh:mm:ss.mmm) e ms (milissegundos totais), botão Ir e passos +/-1 ms. Em ecrãs pequenos a barra de tempo pode ser deslizada horizontalmente.
+- A imagem mostra o frame existente mais próximo do instante solicitado; 1 ms na interface não cria frames que não existem na origem.
+- Transcrição em janelas até 30 segundos com 2 segundos de sobreposição e propriedade temporal por janela; silêncio antes/depois do pedido com tempos compensados.
+- Nova verificação independente dos primeiros 8 segundos quando necessário (ou em vídeos mais longos). Mantém a fala do início, sem a cortar artificialmente. Não é garantia de reconhecimento correto de toda a fala.
+- Modelos Groq: Whisper Large V3 e Turbo para áudio; restantes modelos de linguagem para revisão e edição por prompt. Lista dinâmica através do botão Atualizar modelos, com a chave do utilizador.
+- Pedir uma revisão extra pode consumir mais quota. Nunca inventa uma transcrição usando um modelo apenas de texto como se tivesse ouvido o áudio.
+- Uma fonte por modelo de jornal: Playfair, Special Elite, Montserrat ou Oswald; sem troca por palavra, sem negrito/itálico, caixas retas e inclinação ligeira da palavra. Uma fonte escolhida manualmente sobrepõe a do modelo, uniformemente.
+- Miniaturas animadas nas quatro galerias; demonstração com movimento para efeitos/transições, texto de exemplo e progressão temporal nas legendas. Pausa/reprodução manual. Só anima as miniaturas visíveis, e respeita reduzir movimento por defeito.
+- Preservadas as correções de gravação em fila, ícones PNG, exportações repetidas com recursos próprios e sem troca silenciosa de método/codec.
+- Exportação mostra dimensões verificadas e débito pedido separado da média real do ficheiro (vídeo + áudio + contentor).
 
-## Limitações
-Uma exportação editada é recodificada; não é uma cópia sem perdas. Não se recupera detalhe ausente da origem. Efeitos de desfoque escolhidos pelo utilizador continuam ativos. Tempo real pode perder frames em dispositivos lentos e é interrompido se a página for ocultada. Codec, 2K/4K e débito dependem do aparelho. A média real inclui áudio/contentor e não é o débito isolado da pista de vídeo.
+## Qualidade
+O preview pequeno não é usado como origem da exportação. O motor recebe as dimensões pedidas e lê o vídeo original. 2K/4K é ampliação por interpolação, NÃO super-resolução por IA. Não foi adicionado um modelo de reconstrução de detalhe. Exportação editada é recodificada e não é sem perdas. Efeitos de desfoque aplicados pelo utilizador continuam ativos.
 
 ## Segurança
-Nenhuma chave de API incluída. Não publiques a tua chave ou links de configuração que a contenham. Um site público não consegue manter secreta uma chave colocada no navegador; para uso por terceiros usa um backend.
+Sem chaves API incluídas. Não publiques chaves nem links de configuração com chaves. Para terceiros usa um backend. Os projetos guardados no navegador não são uma cópia de segurança na nuvem.
