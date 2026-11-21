@@ -36,7 +36,7 @@ function ensureProject(firstName){
   $('projName').value=P.name;try{localStorage.setItem('fenixcut_last',P.id);}catch(e){}
 }
 function scheduleSave(){
-  if(!P.id||P.busy)return;
+  if(!P.id)return;
   setSaveState('dirty');clearTimeout(P.timer);P.timer=setTimeout(saveNow,1200);
 }
 function buildRecord(){
@@ -45,19 +45,30 @@ function buildRecord(){
   return{id:P.id,name:P.name,created:P.created,updated:Date.now(),dur:S.total,state:JSON.parse(snap()),uid,thumb,
     sources:Object.values(SRC).map(s=>({id:s.id,name:s.name,type:s.file.type,dur:s.dur,vw:s.vw,vh:s.vh,size:s.file.size}))};
 }
-async function saveNow(){
-  if(!P.id||P.busy)return;
-  clearTimeout(P.timer);setSaveState('saving');
-  try{
-    for(const s of Object.values(SRC)){
-      if(!s.saved){await idbPut('files',{key:P.id+':'+s.id,blob:s.file,name:s.name,type:s.file.type});s.saved=true;}
-    }
-    await idbPut('projects',buildRecord());
-    setSaveState('saved');
-  }catch(e){
-    logErr('guardar: '+e.name+' '+e.message);
-    setSaveState('error',e.name==='QuotaExceededError'?'sem espaço no aparelho':e.message);
-  }
+let saveQueue=Promise.resolve(),saveRevision=0;
+function saveNow(){
+  if(!P.id)return Promise.resolve(true);
+  clearTimeout(P.timer);
+  const revision=++saveRevision,rec=buildRecord();
+  const files=Object.values(SRC).filter(s=>!s.saved).map(s=>({source:s,key:rec.id+':'+s.id,blob:s.file,name:s.name,type:s.file.type}));
+  setSaveState('saving');
+  const task=saveQueue.then(async()=>{
+    P.busy=true;
+    try{
+      const db=await idb();
+      await new Promise((resolve,reject)=>{
+        const t=db.transaction(['files','projects'],'readwrite');
+        for(const f of files)t.objectStore('files').put({key:f.key,blob:f.blob,name:f.name,type:f.type});
+        t.objectStore('projects').put(rec);
+        t.oncomplete=resolve;t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error||new Error('Gravação interrompida'));
+      });
+      for(const f of files)f.source.saved=true;
+      if(revision===saveRevision&&P.id===rec.id)setSaveState('saved');
+      return true;
+    }catch(err){logErr('guardar: '+err.message);setSaveState('error',err.name==='QuotaExceededError'?'sem espaço no aparelho':err.message);return false;}
+    finally{P.busy=false;}
+  });
+  saveQueue=task.then(()=>{},()=>{});return task;
 }
 async function loadSrc(file,id,saved){
   const url=URL.createObjectURL(file),v=document.createElement('video');
@@ -68,7 +79,7 @@ async function loadSrc(file,id,saved){
   return SRC[id];
 }
 function clearProject(){
-  pause();
+  pause();clearTimeout(P.timer);
   for(const id in SRC){try{SRC[id].video.remove();URL.revokeObjectURL(SRC[id].url);}catch(e){}delete SRC[id];}
   for(const k in _abCache)delete _abCache[k];
   for(const k in _sinks)delete _sinks[k];
@@ -76,16 +87,18 @@ function clearProject(){
   hist.length=0;hi=-1;
 }
 async function newProject(){
-  await saveNow();clearProject();
+  if(S.exporting){toast('Aguarda o fim da exportação.');return;}
+  if(!await saveNow()){toast('Não foi possível guardar. O projeto atual foi mantido.');return;}clearProject();
   P.id=null;P.named=false;P.name='Projeto '+new Date().toLocaleDateString('pt-PT');P.created=0;
   $('projName').value=P.name;S.ratio=[9,16];$('ratio').value='9:16';initRenderer();
   try{localStorage.removeItem('fenixcut_last');}catch(e){}
   commit();refreshAll(true);setSaveState('');closeSheet();toast('Projeto novo. Importa um vídeo para começar.');
 }
 async function openProject(id,quiet){
+  if(S.exporting){toast('Aguarda o fim da exportação.');return;}
   try{
+    if(P.id&&!await saveNow())throw new Error('O projeto atual não foi guardado; abertura cancelada.');
     const rec=await idbGet('projects',id);if(!rec)throw new Error('projeto não encontrado');
-    if(P.id&&P.id!==id)await saveNow();
     clearProject();
     const missing=[];
     for(const m of rec.sources){
@@ -106,6 +119,7 @@ async function openProject(id,quiet){
   }catch(e){logErr('abrir: '+e.message);toast('Não consegui abrir: '+e.message,5000);}
 }
 async function dupProject(id){
+  if(P.id===id&&!await saveNow())return;
   const rec=await idbGet('projects',id);if(!rec)return;
   const nid2='p'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
   for(const m of rec.sources){const f=await idbGet('files',id+':'+m.id);if(f)await idbPut('files',{key:nid2+':'+m.id,blob:f.blob,name:f.name,type:f.type});}
@@ -113,7 +127,9 @@ async function dupProject(id){
   renderSheet();
 }
 async function delProject(id){
+  if(S.exporting){toast('Aguarda o fim da exportação.');return;}
   if(!confirm('Apagar este projeto e os vídeos guardados nele?'))return;
+  clearTimeout(P.timer);await saveQueue;
   const keys=await idbKeys('files');
   for(const k of keys)if(String(k).startsWith(id+':'))await idbDel('files',k);
   await idbDel('projects',id);
@@ -121,6 +137,7 @@ async function delProject(id){
   renderSheet();
 }
 async function exportBackup(id){
+  if(P.id===id&&!await saveNow())return;
   const rec=await idbGet('projects',id);if(!rec)return;
   const r=Object.assign({},rec);delete r.thumb;
   download((rec.name||'projeto').replace(/[^\w\-]+/g,'_')+'.fenixcut.json',JSON.stringify(r,null,1),'application/json');
@@ -142,7 +159,6 @@ async function renderSheet(){
   box.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>delProject(b.dataset.del));
   box.querySelectorAll('[data-bk]').forEach(b=>b.onclick=()=>exportBackup(b.dataset.bk));
 }
-/* ---------- responsivo / foco ---------- */
 function applyViewport(){
   const vv=window.visualViewport,h=vv?vv.height:window.innerHeight;
   document.documentElement.style.setProperty('--appH',Math.round(h)+'px');

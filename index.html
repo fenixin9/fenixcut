@@ -45,9 +45,8 @@
     </div>
     <div class="transport">
       <button class="icon big" id="btnPlay" aria-label="Reproduzir ou pausar"></button>
-      <span id="time" class="time">0:00.0 / 0:00.0</span>
+      <input id="timeIn" class="timein" type="text" inputmode="decimal" value="0:00.000" aria-label="Tempo atual (escreve para ir para esse ponto)" title="Escreve o tempo (ex.: 1:23.450) e carrega Enter"><span id="timeTot" class="time">/ 0:00.000</span>
       <span class="sp"></span>
-      <input id="zoom" class="zoomsl" type="range" min="20" max="200" value="60" aria-label="Zoom da timeline">
       <button class="icon" id="btnFocus" aria-label="Ampliar pré-visualização" title="Ampliar pré-visualização"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
       <button class="icon" id="btnSplit" aria-label="Dividir clipe na agulha"></button>
       <button class="icon" id="btnDel" aria-label="Apagar seleção"></button>
@@ -55,6 +54,13 @@
     </div>
   </section>
   <section class="tl" aria-label="Timeline">
+    <div class="tlbar">
+      <button class="icon" id="btnStart" aria-label="Ir para o início"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M5 5h2v14H5zM9 12l10-7v14z"/></svg></button>
+      <button class="icon" id="btnPrevF" aria-label="Recuar 1 frame"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M15 6v12L7 12z"/></svg></button>
+      <button class="icon" id="btnNextF" aria-label="Avançar 1 frame"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M9 6v12l8-6z"/></svg></button>
+      <button class="icon" id="btnEnd" aria-label="Ir para o fim"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M17 5h2v14h-2zM15 12L5 5v14z"/></svg></button>
+      <input id="zoom" class="zoomsl" type="range" min="0" max="100" value="28" aria-label="Zoom da timeline (até milissegundos)">
+    </div>
     <div class="tlscroll" id="tlScroll">
       <div class="tlinner" id="tlInner">
         <div class="ruler" id="ruler"></div>

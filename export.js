@@ -20,7 +20,7 @@ async function pickCodec(w,h,fps,bitrate){
   return null;
 }
 
-/* ---------- nitidez (evita vídeo "mole" no ficheiro final) ---------- */
+/* ---------- nitidez ---------- */
 function makeSharpener(w,h,amount){
   try{
     const c=document.createElement('canvas');c.width=w;c.height=h;
@@ -46,7 +46,7 @@ function sharpAmount(w,h){
   let src=0;for(const id in SRC)src=Math.max(src,Math.min(SRC[id].vw,SRC[id].vh));
   if(!src)return 0.25;
   const ratio=Math.min(w,h)/src;
-  return ratio>1.1?0.55:(ratio<0.8?0.3:0.25);
+  return ratio>1.1?0.45:(ratio<0.8?0.3:0.22);
 }
 async function importAny(urls,test){
   for(const u of urls){try{const m=await import(u);if(test(m))return m;}catch(e){console.warn('import falhou',u,e);}}
@@ -86,10 +86,14 @@ async function mixAudio(sr,ch){
   return any?await off.startRendering():null;
 }
 function seekTo(v,t){
-  return new Promise(res=>{
-    if(Math.abs(v.currentTime-t)<0.002&&v.readyState>=2){res();return;}
-    let done=false;const fin=()=>{if(done)return;done=true;v.removeEventListener('seeked',fin);res();};
-    v.addEventListener('seeked',fin);setTimeout(fin,1500);v.currentTime=t;
+  return new Promise((resolve,reject)=>{
+    if(Math.abs(v.currentTime-t)<0.002&&v.readyState>=2){resolve();return;}
+    let timer;const clean=()=>{clearTimeout(timer);v.removeEventListener('seeked',ok);v.removeEventListener('error',bad);};
+    const ok=()=>{clean();v.readyState>=2?resolve():reject(new Error('Frame indisponível'));};
+    const bad=()=>{clean();reject(new Error('Falha ao descodificar o frame'));};
+    v.addEventListener('seeked',ok);v.addEventListener('error',bad);
+    timer=setTimeout(()=>{clean();reject(new Error('Tempo excedido ao procurar frame; exportação interrompida para evitar frames incorretos.'));},10000);
+    try{v.currentTime=t;}catch(err){clean();reject(err);}
   });
 }
 const _sinks={};
@@ -108,15 +112,17 @@ async function exportMB(o,onProg,ctl){
   const{w,h,fps}=o;const MB=await loadMB();
   onProg(0,'A preparar…');
   const format=new MB.Mp4OutputFormat();
-  const vcodec=await MB.getFirstEncodableVideoCodec(format.getSupportedVideoCodecs(),{width:w,height:h});
+  let order=format.getSupportedVideoCodecs();
+  if(o.codec&&o.codec!=='auto'){if(!order.includes(o.codec))throw new Error('Codec solicitado indisponível: '+o.codec);order=[o.codec];}
+  const vcodec=await MB.getFirstEncodableVideoCodec(order,{width:w,height:h});
   if(!vcodec)throw new Error(`Este aparelho não codifica ${w}×${h}`);
   const R=createRenderer(w,h);
-  const SH=makeSharpener(w,h,sharpAmount(w,h)),srcCv=SH?SH.out:R.out;
+  const SH=null,srcCv=SH?SH.out:R.out;
   const output=new MB.Output({format,target:new MB.BufferTarget()});
   let vs;
-  const cfgs=[{codec:vcodec,bitrate:o.bitrate,latencyMode:'quality',bitrateMode:'variable',keyFrameInterval:2},{codec:vcodec,bitrate:o.bitrate}];
+  const cfgs=[{codec:vcodec,bitrate:o.bitrate,latencyMode:'quality',bitrateMode:o.bm||'constant',keyFrameInterval:2},{codec:vcodec,bitrate:o.bitrate}];
   for(const cf of cfgs){try{vs=new MB.CanvasSource(srcCv,cf);break;}catch(err){console.warn('CanvasSource',err);}}
-  if(!vs)vs=new MB.CanvasSource(srcCv,{codec:vcodec,quality:new MB.Quality('very-high')});
+  if(!vs)throw new Error('O codificador recusou o débito solicitado.');
   output.addVideoTrack(vs,{frameRate:fps});
   let abuf=null,as=null;
   if(o.audio){
@@ -143,10 +149,11 @@ async function exportMB(o,onProg,ctl){
       if(sk){
         let k=0,last=null;
         for await(const r of sk.canvasesAtTimestamps(times)){
-          const img=r?r.canvas:last;last=img;
-          await emit(idx[k++],img||SRC[c.src].video);
+          if(!r||!r.canvas)throw new Error('Frame de origem ausente; exportação interrompida.');
+          const img=r.canvas;last=img;
+          await emit(idx[k++],img);
         }
-        while(k<idx.length)await emit(idx[k++],last||SRC[c.src].video);
+        if(k!==idx.length)throw new Error('Descodificação incompleta: faltam frames.');
       }else{
         const v=SRC[c.src].video;v.pause();v.muted=true;
         for(let k=0;k<idx.length;k++){await seekTo(v,times[k]);await emit(idx[k],v);}
@@ -156,7 +163,7 @@ async function exportMB(o,onProg,ctl){
     onProg(0.98,'A finalizar ficheiro…');
     await output.finalize();
     onProg(1,'Concluído');
-    return{blob:new Blob([output.target.buffer],{type:'video/mp4'}),ext:'mp4'};
+    return{blob:new Blob([output.target.buffer],{type:'video/mp4'}),ext:'mp4',info:{method:'rápido (descodificação em sequência)',codec:vcodec,bitrate:o.bitrate,sharp:SH?sharpAmount(w,h):0}};
   }catch(e){try{await output.cancel();}catch(_){}throw e;}
   finally{R.dispose();if(SH)SH.dispose();}
 }
@@ -172,9 +179,9 @@ async function exportWebCodecs(o,onProg,ctl){
   const muxer=new Muxer({target,video:{codec:'avc',width:w,height:h},...(abuf?{audio:{codec:'aac',numberOfChannels:2,sampleRate:48000}}:{}),fastStart:'in-memory'});
   let fail=null;
   const venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{fail=e;}});
-  venc.configure(Object.assign({},cfg,{latencyMode:'quality',bitrateMode:'variable'}));
+  venc.configure(Object.assign({},cfg,{latencyMode:'quality',bitrateMode:o.bm||'constant'}));
   const R=createRenderer(w,h);
-  const SH=makeSharpener(w,h,sharpAmount(w,h));
+  const SH=null;
   try{
     for(let n=0;n<N;n++){
       if(ctl.cancel)throw new Error('cancelado');
@@ -204,59 +211,97 @@ async function exportWebCodecs(o,onProg,ctl){
     if(fail)throw fail;
     muxer.finalize();venc.close();
     onProg(1,'Concluído');
-    return{blob:new Blob([target.buffer],{type:'video/mp4'}),ext:'mp4'};
+    return{blob:new Blob([target.buffer],{type:'video/mp4'}),ext:'mp4',info:{method:'alternativo (frame a frame)',codec:cfg.codec,bitrate:o.bitrate,sharp:SH?sharpAmount(w,h):0}};
   }finally{R.dispose();if(SH)SH.dispose();try{venc.state!=='closed'&&venc.close();}catch(e){}}
 }
 const _nodes={};
 async function exportRealtime(o,onProg,ctl){
-  const{w,h,fps,bitrate}=o;const total=S.total;
-  const R=createRenderer(w,h);
-  const SH=makeSharpener(w,h,sharpAmount(w,h));
-  const stream=(SH?SH.out:R.out).captureStream(fps);
-  const AC=new(window.AudioContext||window.webkitAudioContext)();
-  const dest=AC.createMediaStreamDestination();
-  const used=[...new Set(S.clips.map(c=>c.src))];
-  for(const id of used){const v=SRC[id].video;if(!_nodes[id])_nodes[id]=AC.createMediaElementSource(v);_nodes[id].disconnect();_nodes[id].connect(dest);}
-  if(AC.state==='suspended')await AC.resume();
-  const tracks=[...stream.getVideoTracks()];if(o.audio)tracks.push(...dest.stream.getAudioTracks());
-  const mime=['video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'].find(m=>window.MediaRecorder&&MediaRecorder.isTypeSupported(m));
-  if(!mime)throw new Error('Este navegador não suporta gravação de vídeo.');
-  const rec=new MediaRecorder(new MediaStream(tracks),{mimeType:mime,videoBitsPerSecond:bitrate});
-  const chunks=[];rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
-  const stopped=new Promise(r=>{rec.onstop=r;});
-  rec.start(500);
-  const ACT={id:null};const t0=performance.now();
+  const {w,h,fps,bitrate}=o,total=S.total;
+  if(!window.MediaRecorder)throw new Error('MediaRecorder indisponível');
+  if(o.codec==='hevc')throw new Error('HEVC não está disponível no modo Compatível. Escolhe Automático ou H.264.');
+  const choices=o.codec==='avc'?['video/mp4;codecs=avc1.42002A,mp4a.40.2','video/mp4;codecs=avc1']:['video/mp4;codecs=avc1.42002A,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus'];
+  const mime=choices.find(m=>MediaRecorder.isTypeSupported(m));
+  if(!mime)throw new Error('Formato solicitado não suportado neste modo.');
+  let R,stream,AC,dest,rec,stopped,raf=0;const videos={},gains={},chunks=[];
+  let fail=null,active=null;
   try{
-    await new Promise((res,rej)=>{
-      const loop=()=>{
-        if(ctl.cancel){rej(new Error('cancelado'));return;}
+    R=createRenderer(w,h);stream=R.out.captureStream(fps);
+    if(o.audio){AC=new(window.AudioContext||window.webkitAudioContext)();dest=AC.createMediaStreamDestination();await AC.resume();}
+    for(const id of new Set(S.clips.map(c=>c.src))){
+      const v=document.createElement('video');v.preload='auto';v.playsInline=true;v.src=SRC[id].url;v.muted=!o.audio;
+      videos[id]=v;document.getElementById('hiddenVideos').appendChild(v);
+      await new Promise((res,rej)=>{const tm=setTimeout(()=>rej(new Error('Vídeo não carregou para exportar')),15000);v.onloadeddata=()=>{clearTimeout(tm);res();};v.onerror=()=>{clearTimeout(tm);rej(new Error('Vídeo indisponível'));};v.load();});
+      if(AC){const node=AC.createMediaElementSource(v),g=AC.createGain();g.gain.value=0;node.connect(g);g.connect(dest);gains[id]=g;}
+    }
+    const tracks=[...stream.getVideoTracks(),...(dest?dest.stream.getAudioTracks():[])];
+    rec=new MediaRecorder(new MediaStream(tracks),{mimeType:mime,videoBitsPerSecond:bitrate,audioBitsPerSecond:192000});
+    if(o.codec==='avc'&&!/avc|h264/i.test(rec.mimeType))throw new Error('O navegador não respeitou H.264. Escolhe codec Automático.');
+    rec.ondataavailable=ev=>{if(ev.data.size)chunks.push(ev.data);};
+    stopped=new Promise(res=>{rec.onstop=res;});rec.onerror=ev=>{fail=ev.error||new Error('Erro na gravação');};
+    async function activate(c,t){
+      for(const [id,v]of Object.entries(videos)){v.pause();if(gains[id])gains[id].gain.value=0;}
+      if(!c){active=null;return;}
+      const v=videos[c.src];await seekTo(v,srcTimeAt(c,t));v.playbackRate=c.speed;
+      if(gains[c.src])gains[c.src].gain.value=c.vol;
+      await v.play();active=c.id;
+    }
+    await activate(clipAt(0),0);
+    const first=clipAt(0);first?renderScene(R,0,{clip:first,img:videos[first.src]}):R.black();
+    rec.start(250);const t0=performance.now();
+    await new Promise((resolve,reject)=>{
+      const loop=async()=>{try{
+        if(ctl.cancel)throw new Error('cancelado');if(fail)throw fail;
+        if(document.hidden)throw new Error('Página ocultada: gravação interrompida para evitar perda de frames.');
         const t=(performance.now()-t0)/1000;
-        if(t>=total){res();return;}
-        syncPlayback(t,ACT,false);renderScene(R,t);if(SH)SH.run(R.out);
-        onProg(t/total,`Gravação em tempo real ${Math.round(t)}s / ${Math.round(total)}s (não saias desta página)`);
-        requestAnimationFrame(loop);
-      };
-      loop();
+        if(t>=total){resolve();return;}
+        const c=clipAt(t);if((c?c.id:null)!==active)await activate(c,t);
+        if(c)renderScene(R,t,{clip:c,img:videos[c.src]});else R.black();
+        onProg(t/total,'Modo compatível em tempo real — mantém a página visível');raf=requestAnimationFrame(loop);
+      }catch(err){reject(err);}};loop();
     });
+    rec.stop();await stopped;
+    if(fail)throw fail;
+    const blob=new Blob(chunks,{type:mime.split(';')[0]});
+    if(!blob.size)throw new Error('O navegador gerou um ficheiro vazio.');
+    return{blob,ext:mime.includes('mp4')?'mp4':'webm',info:{method:'compatível (tempo real)',codec:rec.mimeType||mime,bitrate,sharp:0}};
   }finally{
-    rec.state!=='inactive'&&rec.stop();await stopped;
-    S.clips.forEach(c=>SRC[c.src].video.pause());
-    for(const id of used){_nodes[id].disconnect();_nodes[id].connect(AC.destination);}
-    R.dispose();if(SH)SH.dispose();
+    cancelAnimationFrame(raf);
+    if(rec&&rec.state!=='inactive'){rec.stop();if(stopped)await stopped;}
+    for(const v of Object.values(videos)){v.pause();v.removeAttribute('src');v.load();v.remove();}
+    if(stream)stream.getTracks().forEach(t=>t.stop());
+    if(dest)dest.stream.getTracks().forEach(t=>t.stop());
+    if(AC&&AC.state!=='closed')await AC.close();
+    if(R)R.dispose();
   }
-  return{blob:new Blob(chunks,{type:mime.split(';')[0]}),ext:mime.includes('mp4')?'mp4':'webm'};
 }
-async function runExport(o,set,ctl){
-  /* débito mais alto: o anterior deixava o vídeo desfocado */
+async function runExportInternal(o,set,ctl){
   const mp=o.w*o.h/1e6;
-  o.bitrate=Math.round(Math.min(Math.max(o.bitrate*2,mp*6e6),mp*22e6,90e6));
+  o.bitrate=o.mbps>0?Math.round(o.mbps*1e6):Math.round(Math.min(Math.max(o.bitrate*2,mp*6e6),mp*22e6,90e6));
   let srcShort=0;for(const id in SRC)srcShort=Math.max(srcShort,Math.min(SRC[id].vw,SRC[id].vh));
-  if(srcShort&&Math.min(o.w,o.h)>srcShort*1.15)toast(`O vídeo original tem ${srcShort}p; exportar em ${Math.min(o.w,o.h)}p aumenta o tamanho mas não cria detalhe. Para máxima nitidez exporta na resolução original.`,7000);
+  if(srcShort&&Math.min(o.w,o.h)>srcShort*1.15)toast(`O vídeo original tem ${srcShort}p. Em ${Math.min(o.w,o.h)}p a imagem será ampliada: não é possível recuperar detalhe que a câmara não captou.`,8000);
   if(o.method!=='rt'){
     try{return await exportMB(o,set,ctl);}catch(e){if(e.message==='cancelado')throw e;console.warn('MB',e);logErr('export rápido: '+e.message);}
-    const cfg=await pickCodec(o.w,o.h,o.fps,o.bitrate);
+    const cfg=o.codec==='hevc'?null:await pickCodec(o.w,o.h,o.fps,o.bitrate);
     if(cfg){try{o.cfg=cfg;set(0,'A tentar modo alternativo…');return await exportWebCodecs(o,set,ctl);}catch(e){if(e.message==='cancelado')throw e;console.warn('WC',e);logErr('export alternativo: '+e.message);}}
-    toast('Exportação rápida indisponível aqui. A usar modo compatível (tempo real, máx. qualidade do navegador).',6000);
+    throw new Error('Exportação frame a frame falhou. Não foi alterado o codec nem usado tempo real automaticamente. Consulta o diagnóstico; podes escolher o método Compatível explicitamente.');
   }
   return await exportRealtime(o,set,ctl);
+}
+
+async function runExport(options,set,ctl){
+  const o=Object.assign({},options);
+  const saved=Object.values(SRC).map(s=>({v:s.video,muted:s.video.muted,volume:s.video.volume,rate:s.video.playbackRate}));
+  try{
+    if(document.fonts)await document.fonts.ready;
+    const out=await runExportInternal(o,set,ctl);
+    if(!out.blob||!out.blob.size)throw new Error('Ficheiro exportado vazio');
+    const v=document.createElement('video'),url=URL.createObjectURL(out.blob);
+    try{
+      await new Promise((resolve,reject)=>{const tm=setTimeout(()=>reject(new Error('Não foi possível validar o vídeo final')),10000);v.onloadedmetadata=()=>{clearTimeout(tm);resolve();};v.onerror=()=>{clearTimeout(tm);reject(new Error('O vídeo final não pode ser lido'));};v.preload='metadata';v.src=url;});
+      out.info=Object.assign({},out.info,{width:v.videoWidth,height:v.videoHeight,duration:v.duration,averageMbps:Number.isFinite(v.duration)&&v.duration>0?out.blob.size*8/v.duration/1e6:null});
+      if(Number.isFinite(v.duration)&&Math.abs(v.duration-S.total)>Math.max(.3,S.total*.03))throw new Error('A duração exportada não corresponde ao projeto.');
+      if(v.videoWidth!==o.w||v.videoHeight!==o.h)throw new Error('O navegador alterou a resolução pedida. Exportação rejeitada.');
+    }finally{v.removeAttribute('src');v.load();URL.revokeObjectURL(url);}
+    return out;
+  }finally{for(const x of saved){x.v.pause();x.v.muted=x.muted;x.v.volume=x.volume;x.v.playbackRate=x.rate;}}
 }

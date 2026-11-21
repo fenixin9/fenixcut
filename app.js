@@ -13,6 +13,8 @@ const ICON={
  plus:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
  mic:'<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>'
 };
+function fmtMs(t){t=Math.max(0,t);const m=Math.floor(t/60),s=t-m*60;return m+':'+s.toFixed(3).padStart(6,'0');}
+function parseTime(s){s=String(s).trim().replace(',','.');if(!s)return null;const p=s.split(':').map(Number);if(p.length>3||p.some(x=>isNaN(x)||x<0))return null;let t=0;for(const x of p)t=t*60+x;return t;}
 const fmt=t=>{t=Math.max(0,t);const m=Math.floor(t/60),s=t-m*60;return `${m}:${s.toFixed(1).padStart(4,'0')}`;};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function toast(msg,ms=3500){const t=$('toast');t.textContent=msg;t.classList.add('on');clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('on'),ms);}
@@ -101,7 +103,7 @@ function setT(t){
   invalidate();
 }
 function setPlayIcon(){$('btnPlay').innerHTML=S.playing?ICON.pause:ICON.play;}
-let lastTT='',lastPH=-1;
+let lastTT='',lastTot='',lastPH=-1;
 function tick(now){
   if(!S.exporting){
     if(S.playing){
@@ -118,7 +120,8 @@ function tick(now){
       dirty=true;
     }
     if(dirty&&R){dirty=false;try{renderScene(R,S.t);}catch(e){logErr('render: '+e.message);}}
-    const tt=`${fmt(S.t)} / ${fmt(S.total)}`;if(tt!==lastTT){lastTT=tt;$('time').textContent=tt;}
+    const tt=fmtMs(S.t);if(tt!==lastTT){lastTT=tt;const ti=$('timeIn');if(document.activeElement!==ti)ti.value=tt;}
+    const tot=fmtMs(S.total);if(tot!==lastTot){lastTot=tot;$('timeTot').textContent='/ '+tot;}
     const px=Math.round(S.t*S.pps);if(px!==lastPH){lastPH=px;$('playhead').style.transform=`translateX(${px}px)`;}
     if(S.playing){const sc=$('tlScroll');if(px>sc.scrollLeft+sc.clientWidth-40||px<sc.scrollLeft)sc.scrollLeft=px-60;}
   }
@@ -164,9 +167,10 @@ function newText(){return{id:nid(),text:'Escreve aqui',start:S.t,dur:3,size:80,c
 /* ---------- timeline ---------- */
 function renderTimeline(){
   const pps=S.pps,W=Math.max(S.total,6)*pps+120;$('tlInner').style.width=W+'px';
-  let rl='';const step=pps>=100?1:pps>=50?2:5;
-  for(let s=0;s<=Math.max(S.total,6)+2;s+=step)rl+=`<span style="left:${s*pps}px">${s}s</span>`;
-  const rul=$('ruler');rul.innerHTML=rl;rul.style.setProperty('--pps',pps);rul.classList.toggle('half',pps>=90);
+  const steps=[0.05,0.1,0.2,0.5,1,2,5,10,30,60],step=steps.find(s=>s*pps>=62)||60,end=Math.max(S.total,6)+2,dec=step<0.1?2:(step<1?1:0);
+  let rl='';
+  for(let i=0;i*step<=end&&i<2600;i++){const s=i*step;const lab=step>=1?(s>=60?Math.floor(s/60)+':'+String(Math.round(s%60)).padStart(2,'0'):s+'s'):s.toFixed(dec)+'s';rl+=`<span style="left:${s*pps}px">${lab}</span>`;}
+  const rul=$('ruler');rul.innerHTML=rl;rul.style.setProperty('--pps',pps);rul.classList.toggle('half',pps>=90&&pps<300);rul.classList.toggle('tenth',pps>=300);
   const sel=S.sel,selId=sel?sel.id:(selClip()||{}).id;
   $('trClips').innerHTML=S.clips.map(c=>`<div class="blk clip${c.id===selId&&(!sel||sel.type==='clip')?' sel':''}" data-t="clip" data-id="${c.id}" style="left:${c.tStart*pps}px;width:${Math.max(8,c.dur*pps-2)}px"><span>${esc(c.name)}</span><small>${fmt(c.dur)}${c.speed!==1?' · '+c.speed+'×':''}</small></div>`).join('');
   $('trTexts').innerHTML=S.texts.map(x=>`<div class="blk text${sel&&sel.id===x.id?' sel':''}" data-t="text" data-id="${x.id}" style="left:${x.start*pps}px;width:${Math.max(8,x.dur*pps-2)}px"><span>${esc(x.text)}</span></div>`).join('');
@@ -187,7 +191,7 @@ function bindTimeline(){
     setT(at(e));renderTimeline();
     if(b||prev)renderPanel();
   });
-  $('zoom').addEventListener('input',e=>{S.pps=+e.target.value;renderTimeline();});
+  $('zoom').addEventListener('input',e=>{const sc=$('tlScroll'),keep=S.t*S.pps-sc.scrollLeft;S.pps=20*Math.pow(50,(+e.target.value)/100);renderTimeline();sc.scrollLeft=Math.max(0,S.t*S.pps-keep);});
 }
 
 /* ---------- painéis ---------- */
@@ -205,14 +209,35 @@ function renderPanel(){
   drawGalleries();
 }
 function drawGalleries(){
-  const go=()=>{
-    document.querySelectorAll('canvas[data-style]').forEach(cv=>{try{drawStyleThumb(cv,cv.dataset.style);}catch(e){}});
-    document.querySelectorAll('canvas[data-tstyle]').forEach(cv=>{try{drawTextThumb(cv,cv.dataset.tstyle);}catch(e){}});
-    document.querySelectorAll('canvas[data-fxp]').forEach(cv=>{try{drawFxThumb(cv,PRESETS[cv.dataset.fxp].v,'none');}catch(e){}});
-    const c=selClip();
-    document.querySelectorAll('canvas[data-trp]').forEach(cv=>{try{drawFxThumb(cv,c?c.fx:{},cv.dataset.trp);}catch(e){}});
+  const c=selClip();
+  document.querySelectorAll('canvas[data-style]').forEach(cv=>{try{drawStyleThumb(cv,cv.dataset.style,0.9);}catch(e){}});
+  document.querySelectorAll('canvas[data-tstyle]').forEach(cv=>{try{drawTextThumb(cv,cv.dataset.tstyle,0.9);}catch(e){}});
+  document.querySelectorAll('canvas[data-fxp]').forEach(cv=>{try{drawFxThumb(cv,PRESETS[cv.dataset.fxp].v,'none',0.9);}catch(e){}});
+  document.querySelectorAll('canvas[data-trp]').forEach(cv=>{try{drawFxThumb(cv,c?c.fx:{},cv.dataset.trp,0.35);}catch(e){}});
+  startThumbAnim();
+}
+let thumbAnim=null,thumbT0=0;
+function startThumbAnim(){
+  if(thumbAnim)return;
+  thumbT0=performance.now();let last=0;
+  const loop=now=>{
+    thumbAnim=requestAnimationFrame(loop);
+    if(now-last<66||document.hidden||S.exporting)return;last=now;
+    const cvs=document.querySelectorAll('canvas[data-fxp],canvas[data-trp],canvas[data-tstyle],canvas[data-style]');
+    if(!cvs.length){cancelAnimationFrame(thumbAnim);thumbAnim=null;return;}
+    if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+    const box=$('panelBody').getBoundingClientRect(),t=(now-thumbT0)/1000,c=selClip();
+    cvs.forEach(cv=>{
+      const r=cv.getBoundingClientRect();if(!r.width||r.bottom<box.top||r.top>box.bottom)return;
+      try{
+        if(cv.dataset.fxp)drawFxThumb(cv,PRESETS[cv.dataset.fxp].v,'none',t);
+        else if(cv.dataset.trp)drawFxThumb(cv,c?c.fx:{},cv.dataset.trp,t);
+        else if(cv.dataset.tstyle)drawTextThumb(cv,cv.dataset.tstyle,t);
+        else drawStyleThumb(cv,cv.dataset.style,t);
+      }catch(e){}
+    });
   };
-  go();setTimeout(go,350);
+  thumbAnim=requestAnimationFrame(loop);
 }
 function pClip(){
   const c=selClip();if(!c)return empty('Importa um ou mais vídeos para começar a editar.');
@@ -221,8 +246,8 @@ function pClip(){
   ${rng('clip','speed','Velocidade',0.25,4,0.05,c.speed,fmtX)}
   ${rng('clip','vol','Volume',0,1,0.01,Math.min(1,c.vol),fmtP)}
   ${rng('clip','kb','Zoom lento (Ken Burns)',0,0.4,0.01,c.kb,fmtP)}
-  <div class="row2"><label class="fld">Início (s)<input type="number" data-sc="clip" data-k="in" data-int="1" min="0" max="${src.dur.toFixed(2)}" step="0.1" value="${c.in.toFixed(2)}"></label>
-  <label class="fld">Fim (s)<input type="number" data-sc="clip" data-k="out" data-int="1" min="0" max="${src.dur.toFixed(2)}" step="0.1" value="${c.out.toFixed(2)}"></label></div>
+  <div class="row2"><label class="fld">Início (s)<input type="number" data-sc="clip" data-k="in" data-int="1" min="0" max="${src.dur.toFixed(2)}" step="0.001" value="${c.in.toFixed(3)}"></label>
+  <label class="fld">Fim (s)<input type="number" data-sc="clip" data-k="out" data-int="1" min="0" max="${src.dur.toFixed(2)}" step="0.001" value="${c.out.toFixed(3)}"></label></div>
   <label class="fld">Enquadramento do projeto<select data-sc="proj" data-k="fit"><option value="cover" ${S.fit==='cover'?'selected':''}>Preencher (corta)</option><option value="contain" ${S.fit==='contain'?'selected':''}>Caber (barras pretas)</option></select></label>
   <p class="hint">Fonte: ${esc(src.name)} · ${src.vw}×${src.vh} · ${fmt(src.dur)}</p>`;
 }
@@ -247,8 +272,8 @@ function pText(){
   if(!x)return h+empty(S.texts.length?'Toca num texto na timeline para o editar.':'Ainda sem textos.');
   const opt=(a,v)=>a.map(([k,n])=>`<option value="${k}" ${v===k?'selected':''}>${n}</option>`).join('');
   return h+`<label class="fld">Texto<textarea data-sc="text" data-k="text" rows="2">${esc(x.text)}</textarea></label>
-  <div class="row2"><label class="fld">Início (s)<input type="number" data-sc="text" data-k="start" data-num="1" min="0" step="0.1" value="${x.start.toFixed(2)}"></label>
-  <label class="fld">Duração (s)<input type="number" data-sc="text" data-k="dur" data-num="1" min="0.2" step="0.1" value="${x.dur.toFixed(2)}"></label></div>
+  <div class="row2"><label class="fld">Início (s)<input type="number" data-sc="text" data-k="start" data-num="1" min="0" step="0.001" value="${x.start.toFixed(3)}"></label>
+  <label class="fld">Duração (s)<input type="number" data-sc="text" data-k="dur" data-num="1" min="0.2" step="0.001" value="${x.dur.toFixed(3)}"></label></div>
   ${rng('text','size','Tamanho',20,200,1,x.size,v=>v)}${rng('text','y','Posição vertical',5,95,1,x.y,v=>v+'%')}
   <div class="row2"><label class="fld">Fonte<select data-sc="text" data-k="font">${opt(FONTS.map(f=>[f,f]),x.font)}</select></label>
   <label class="fld">Animação<select data-sc="text" data-k="anim">${opt([['none','Nenhuma'],['pop','Pop'],['fade','Fade'],['slide','Subir'],['type','Máquina de escrever']],x.anim)}</select></label></div>
@@ -258,7 +283,7 @@ function pText(){
 function pCaps(){
   const cs=S.capStyle,eng=CFG.engine||'groq',lang=CFG.lang==null?'pt':CFG.lang,variant=CFG.variant||'pt';
   const rows=S.caps.map(s=>`<div class="cap-row ${S.sel&&S.sel.id===s.id?'sel':''}" data-cap="${s.id}">
-   <div class="row3"><input type="number" step="0.1" min="0" data-cap="${s.id}" data-f="start" value="${s.start.toFixed(2)}" aria-label="Início"><input type="number" step="0.1" min="0" data-cap="${s.id}" data-f="end" value="${s.end.toFixed(2)}" aria-label="Fim"><button class="icon" data-capdel="${s.id}" aria-label="Apagar legenda">${ICON.trash}</button></div>
+   <div class="row3"><input type="number" step="0.001" min="0" data-cap="${s.id}" data-f="start" value="${s.start.toFixed(3)}" aria-label="Início"><input type="number" step="0.001" min="0" data-cap="${s.id}" data-f="end" value="${s.end.toFixed(3)}" aria-label="Fim"><button class="icon" data-capdel="${s.id}" aria-label="Apagar legenda">${ICON.trash}</button></div>
    <textarea rows="2" data-cap="${s.id}" data-f="text">${esc(s.text)}</textarea></div>`).join('');
   const L=[['pt','Português'],['en','Inglês'],['es','Espanhol'],['fr','Francês'],['de','Alemão'],['it','Italiano'],['','Detetar automaticamente']];
   const styles=Object.entries(CAP_PRESETS).map(([k,p])=>`<button class="stylecard ${cs.preset===k?'on':''}" data-cappreset="${k}" aria-label="${p.n}"><canvas data-style="${k}" width="300" height="130"></canvas><span>${p.n}</span></button>`).join('');
@@ -285,7 +310,9 @@ function pCaps(){
   <div class="row2"><label class="fld">Idioma<select id="aiLang">${L.map(([k,n])=>`<option value="${k}" ${lang===k?'selected':''}>${n}</option>`).join('')}</select></label>
   <label class="fld">Palavras por legenda<input type="number" id="aiMax" min="1" max="10" value="${CFG.max||3}"></label></div>
   <label class="fld">Ortografia (correção)<select id="aiVar"><option value="pt" ${variant==='pt'?'selected':''}>Português de Portugal (PT-PT)</option><option value="br" ${variant==='br'?'selected':''}>Português do Brasil</option><option value="keep" ${variant==='keep'?'selected':''}>Manter como foi dito</option></select></label>
-  <label class="fld" id="cmWrap">Modelo Groq<select id="aiCM"><option value="whisper-large-v3" ${(CFG.cm||'whisper-large-v3')==='whisper-large-v3'?'selected':''}>Whisper Large V3 (máxima precisão)</option><option value="whisper-large-v3-turbo" ${CFG.cm==='whisper-large-v3-turbo'?'selected':''}>Whisper Large V3 Turbo (mais rápido e barato)</option></select></label>
+  <label class="fld" id="cmWrap">Modelo de transcrição (Groq)<select id="aiCM">${sttOptions().map(m=>`<option value="${m}" ${(CFG.cm||'whisper-large-v3')===m?'selected':''}>${m}</option>`).join('')}</select></label>
+  <label class="fld" id="chatWrap">Modelo de IA para correção e edição<select id="aiChat"><option value="auto">Automático (melhor disponível)</option>${chatOptions().map(m=>`<option value="${m}" ${CFG.chat===m?'selected':''}>${m}</option>`).join('')}</select></label>
+  <button class="btn" data-act="models">Atualizar lista de modelos da Groq</button>
   <label class="fld" id="modelWrap">Modelo local<select id="aiModel"><option value="Xenova/whisper-tiny">Tiny (rápido, menos preciso)</option><option value="Xenova/whisper-base" selected>Base (equilibrado)</option><option value="Xenova/whisper-small">Small (melhor, lento)</option></select></label>
   <label class="fld">Nomes/palavras difíceis (ajuda muito)<input type="text" id="aiPrompt" placeholder="ex.: Pinhal Novo, Pladur, FenixCut" value="${esc(CFG.prompt||'')}"></label>
   <label class="chk" id="fixWrap"><input type="checkbox" id="aiFix" ${CFG.fix===false?'':'checked'}> Corrigir erros com IA (2ª passagem)</label>
@@ -310,17 +337,21 @@ function pAI(){
   <p class="hint">Descreve o que queres e a IA aplica na timeline. Podes desfazer tudo com o botão de desfazer.${o.key?'':' <b>Falta a chave Groq</b> (separador Legendas).'}</p>
   <div class="aibox"><textarea id="aiText" rows="3" placeholder="ex.: remove os silêncios e põe legendas estilo jornal em amarelo e branco">${esc(AIS.prompt)}</textarea><button class="icon" id="aiMic" aria-label="Ditar" ${('webkitSpeechRecognition' in window||'SpeechRecognition' in window)?'':'hidden'}>${ICON.mic}</button></div>
   <div class="chips">${AI_EXAMPLES.map((e,i)=>`<button class="chip" data-aiex="${i}">${esc(e)}</button>`).join('')}</div>
+  <label class="fld">Modelo de IA<select id="aiChat2"><option value="auto">Automático (melhor disponível)</option>${chatOptions().map(m=>`<option value="${m}" ${CFG.chat===m?'selected':''}>${m}</option>`).join('')}</select></label>
   <button class="btn primary wide" id="aiGo" ${AIS.busy?'disabled':''}>${AIS.busy?'A trabalhar…':'Aplicar com IA'}</button>
   <div class="ailog" id="aiLog">${AIS.say?`<p><b>${esc(AIS.say)}</b></p>`:''}${AIS.log.map(l=>`<p class="${l[0]==='✗'?'bad':'ok'}">${esc(l)}</p>`).join('')}</div></div>
   <p class="hint">A IA vê os tempos dos clipes, textos e legendas. Para cortar partes faladas, gera primeiro as legendas.</p>`;
 }
-const EXP={res:1080,fps:30,q:'high',audio:true,method:'auto',cancel:false,busy:false,support:{},result:null};
+const EXP={res:1080,fps:30,q:'high',audio:true,method:'auto',codec:'auto',mbps:0,bm:'constant',cancel:false,busy:false,support:{},result:null};
 function pExp(){
   const rs=RES_LIST.map(([n,s])=>{const[w,h]=dimsFor(s);return `<label class="radio"><input type="radio" name="res" value="${s}" ${EXP.res===s?'checked':''}><span>${n}<small>${w}×${h}</small></span><em id="sup${s}">…</em></label>`;}).join('');
   return `<div class="box"><h3>Resolução</h3><div class="radios">${rs}</div>
   <div class="row2"><label class="fld">Imagens/seg<select id="expFps"><option ${EXP.fps===24?'selected':''}>24</option><option ${EXP.fps===30?'selected':''}>30</option><option ${EXP.fps===60?'selected':''}>60</option></select></label>
   <label class="fld">Qualidade<select id="expQ"><option value="normal" ${EXP.q==='normal'?'selected':''}>Normal</option><option value="high" ${EXP.q==='high'?'selected':''}>Alta</option><option value="max" ${EXP.q==='max'?'selected':''}>Máxima</option></select></label></div>
   <label class="fld">Método<select id="expMethod"><option value="auto">Automático (rápido, com alternativas)</option><option value="rt">Compatível (tempo real)</option></select></label>
+  <div class="row2"><label class="fld">Codec<select id="expCodec"><option value="auto">Automático</option><option value="avc">H.264 (compatível)</option><option value="hevc">H.265/HEVC (se suportado)</option><option value="vp9">VP9</option><option value="av1">AV1</option></select></label>
+  <label class="fld">Débito<select id="expMbps"><option value="0">Automático</option><option value="10">10 Mbps</option><option value="20">20 Mbps</option><option value="35">35 Mbps</option><option value="50">50 Mbps</option><option value="80">80 Mbps</option></select></label></div>
+  <label class="fld">Modo do débito<select id="expBm"><option value="constant">Constante (mais fiável em telemóveis)</option><option value="variable">Variável</option></select></label>
   <label class="chk"><input type="checkbox" id="expAudio" ${EXP.audio?'checked':''}> Incluir áudio</label>
   <button class="btn primary wide" id="expGo">Exportar vídeo</button>
   <button class="btn wide" id="expCancel" hidden>Cancelar</button>
@@ -339,17 +370,19 @@ async function probeExport(){
   }
 }
 async function doExport(){
+  if(EXP.busy)return;
   if(!S.clips.length)return toast('Importa um vídeo primeiro.');
   pause();EXP.cancel=false;EXP.busy=true;S.exporting=true;
   const[w,h]=dimsFor(EXP.res),fps=EXP.fps,bitrate=bitrateFor(w,h,fps,EXP.q);
   const set=(p,m)=>{const b=$('expBar');if(b)b.style.width=Math.round(p*100)+'%';const e=$('expMsg');if(e&&m)e.textContent=m;};
   $('expGo').hidden=true;$('expCancel').hidden=false;$('expProg').hidden=false;$('expRes').innerHTML='';
   try{
-    const out=await runExport({w,h,fps,bitrate,audio:EXP.audio,method:EXP.method},set,EXP);
+    const out=await runExport({w,h,fps,bitrate,audio:EXP.audio,method:EXP.method,codec:EXP.codec,mbps:EXP.mbps,bm:EXP.bm},set,EXP);
+    if(EXP.result&&EXP.result.url)URL.revokeObjectURL(EXP.result.url);
     EXP.result={url:URL.createObjectURL(out.blob),blob:out.blob,ext:out.ext,w,h};
     const name=`fenixcut-${w}x${h}.${out.ext}`;
     if($('expRes')){
-      $('expRes').innerHTML=`<div class="box"><h3>Pronto: ${w}×${h} · ${(out.blob.size/1048576).toFixed(1)} MB</h3><video controls playsinline src="${EXP.result.url}" class="resvid"></video>
+      $('expRes').innerHTML=`<div class="box"><h3>Pronto: ${w}×${h} · ${(out.blob.size/1048576).toFixed(1)} MB</h3><p class="hint">${out.info?`Método: ${esc(out.info.method)} · Codec: ${esc(String(out.info.codec))} · Débito vídeo pedido: ${(out.info.bitrate/1e6).toFixed(1)} Mbps · Média real do ficheiro (vídeo + áudio): ${out.info.averageMbps==null?'indisponível':out.info.averageMbps.toFixed(1)+' Mbps'} · Resolução verificada: ${out.info.width}×${out.info.height}`:''}</p><video controls playsinline src="${EXP.result.url}" class="resvid"></video>
       <div class="btnrow"><a class="btn primary" href="${EXP.result.url}" download="${name}">Descarregar</a><button class="btn" id="expShare">Partilhar / guardar na galeria</button></div></div>`;
       $('expShare').onclick=async()=>{try{const f=new File([out.blob],name,{type:out.blob.type});if(navigator.canShare&&navigator.canShare({files:[f]}))await navigator.share({files:[f]});else toast('Partilha não suportada. Usa Descarregar.');}catch(e){}};
     }
@@ -374,7 +407,7 @@ function copyCfgLink(){
 function readCapCfg(){
   const g=id=>$(id);if(!g('aiEngine'))return;
   CFG.engine=g('aiEngine').value;CFG['key_'+CFG.engine]=(g('aiKey').value||'').trim();CFG.lang=g('aiLang').value;CFG.max=+g('aiMax').value||3;
-  CFG.variant=g('aiVar').value;CFG.cm=g('aiCM').value;CFG.model=g('aiModel').value;CFG.prompt=g('aiPrompt').value.trim();CFG.fix=g('aiFix').checked;saveCFG();
+  CFG.variant=g('aiVar').value;CFG.cm=g('aiCM').value;if(g('aiChat'))CFG.chat=g('aiChat').value;CFG.model=g('aiModel').value;CFG.prompt=g('aiPrompt').value.trim();CFG.fix=g('aiFix').checked;saveCFG();
 }
 function capOpts(){
   const engine=CFG.engine||'groq';
@@ -434,7 +467,7 @@ function bindPanel(root){
   root.querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>act(b.dataset.act));
   const sin=$('srtIn');if(sin)sin.onchange=async e=>{const f=e.target.files[0];if(!f)return;const arr=parseSRT(await f.text());if(!arr.length)return toast('SRT inválido.');S.caps=arr;commit();refreshAll();};
   const eng=$('aiEngine');if(eng){
-    const sync=()=>{const e=eng.value;$('keyWrap').hidden=e==='local';$('modelWrap').hidden=e!=='local';$('cmWrap').hidden=e!=='groq';$('fixWrap').hidden=e==='local';$('aiKey').value=CFG['key_'+e]||'';
+    const sync=()=>{const e=eng.value;$('keyWrap').hidden=e==='local';$('modelWrap').hidden=e!=='local';$('cmWrap').hidden=e!=='groq';$('chatWrap').hidden=e==='local';$('fixWrap').hidden=e==='local';$('aiKey').value=CFG['key_'+e]||'';
       $('engHint').innerHTML=e==='groq'?'Chave grátis em <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>. Só o áudio é enviado, não o vídeo. Fica guardada neste aparelho.':e==='openai'?'Chave em <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a> (pago por minuto). Só o áudio é enviado.':'Corre no teu aparelho, sem enviar nada. O modelo descarrega-se uma vez. É mais lento e menos preciso que a nuvem.';};
     eng.onchange=()=>{CFG.engine=eng.value;saveCFG();sync();};sync();
     $('aiKey').onchange=e=>{CFG['key_'+eng.value]=e.target.value.trim();saveCFG();};
@@ -442,6 +475,7 @@ function bindPanel(root){
     $('aiMax').onchange=e=>{CFG.max=+e.target.value;saveCFG();};
     $('aiPrompt').onchange=e=>{CFG.prompt=e.target.value;saveCFG();};
     $('aiCM').onchange=e=>{CFG.cm=e.target.value;saveCFG();};
+    $('aiChat').onchange=e=>{CFG.chat=e.target.value;saveCFG();};
     $('aiVar').onchange=e=>{CFG.variant=e.target.value;saveCFG();};
     $('aiFix').onchange=e=>{CFG.fix=e.target.checked;saveCFG();};
     if(CFG.model)$('aiModel').value=CFG.model;$('aiModel').onchange=e=>{CFG.model=e.target.value;saveCFG();};
@@ -450,6 +484,7 @@ function bindPanel(root){
     at.oninput=()=>{AIS.prompt=at.value;};
     root.querySelectorAll('[data-aiex]').forEach(b=>b.onclick=()=>{at.value=AI_EXAMPLES[+b.dataset.aiex];AIS.prompt=at.value;});
     $('aiGo').onclick=doAI;
+    $('aiChat2').onchange=e=>{CFG.chat=e.target.value;saveCFG();};
     const mic=$('aiMic');if(mic)mic.onclick=()=>{
       const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR)return;
       const r=new SR();r.lang='pt-PT';r.interimResults=false;
@@ -462,6 +497,8 @@ function bindPanel(root){
     g.onclick=doExport;$('expCancel').onclick=()=>{EXP.cancel=true;};
     root.querySelectorAll('input[name=res]').forEach(r=>r.onchange=()=>{EXP.res=+r.value;});
     $('expFps').onchange=e=>{EXP.fps=+e.target.value;probeExport();};$('expQ').onchange=e=>{EXP.q=e.target.value;probeExport();};
+    $('expCodec').value=EXP.codec;$('expMbps').value=String(EXP.mbps);$('expBm').value=EXP.bm;
+    $('expCodec').onchange=e=>{EXP.codec=e.target.value;};$('expMbps').onchange=e=>{EXP.mbps=+e.target.value;};$('expBm').onchange=e=>{EXP.bm=e.target.value;};
     $('expMethod').value=EXP.method;$('expMethod').onchange=e=>{EXP.method=e.target.value;};$('expAudio').onchange=e=>{EXP.audio=e.target.checked;};
   }
 }
@@ -486,6 +523,11 @@ async function act(a){
   else if(a==='srtout'){if(!S.caps.length)return toast('Sem legendas.');download('legendas.srt',toSRT(),'text/plain');}
   else if(a==='diag'){copyDiag();return;}
   else if(a==='cfglink'){readCapCfg();copyCfgLink();return;}
+  else if(a==='models'){
+    readCapCfg();const o=aiCfg();
+    try{const ids=await listModels(o);toast(ids.length+' modelos disponíveis na tua conta.',4000);S.tab='caps';renderPanel();}catch(e){toast('Não consegui listar: '+e.message,5000);}
+    return;
+  }
   else if(a==='autocap'){
     if(!S.clips.length)return toast('Importa um vídeo primeiro.');
     readCapCfg();
@@ -501,6 +543,12 @@ function refreshAll(full){layout();S.t=Math.min(S.t,S.total);renderTimeline();re
 /* ---------- arranque ---------- */
 function init(){
   initRenderer();bindTimeline();
+  {const ti=$('timeIn');
+   const go=()=>{const v=parseTime(ti.value);if(v==null)toast('Tempo inválido. Exemplos: 1:23.450  ou  83.5');else{if(S.playing)pause();setT(v);}ti.value=fmtMs(S.t);};
+   ti.addEventListener('change',go);ti.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();ti.blur();}});ti.addEventListener('focus',()=>setTimeout(()=>ti.select(),0));
+   $('btnStart').onclick=()=>{pause();setT(0);};$('btnEnd').onclick=()=>{pause();setT(S.total);};
+   $('btnPrevF').onclick=()=>{pause();setT(S.t-1/30);};$('btnNextF').onclick=()=>{pause();setT(S.t+1/30);};
+  }
   $('btnImport').onclick=()=>$('fileIn').click();$('emptyImport').onclick=()=>$('fileIn').click();
   $('fileIn').onchange=e=>{importFiles([...e.target.files]);e.target.value='';};
   $('btnPlay').onclick=()=>S.playing?pause():play();$('btnPlay').innerHTML=ICON.play;

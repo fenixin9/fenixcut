@@ -16,13 +16,15 @@ function encodeWav(f32,sr){
 }
 const _modelCache={};
 async function chatModels(o){
-  const P=CLOUD[o.engine];if(_modelCache[o.engine])return _modelCache[o.engine];
+  const P=CLOUD[o.engine];
+  const pick=(typeof CFG!=='undefined'&&CFG.chat&&CFG.chat!=='auto')?[CFG.chat]:[];
+  if(_modelCache[o.engine])return pick.concat(_modelCache[o.engine].filter(m=>m!==pick[0]));
   let ids=[];
   try{const r=await fetch(P.models,{headers:{Authorization:'Bearer '+o.key}});if(r.ok){const j=await r.json();ids=(j.data||[]).map(m=>m.id);}else if(r.status===401)throw new Error('Chave API inválida.');}
   catch(e){if(e.message==='Chave API inválida.')throw e;}
   let list=P.pref.filter(m=>!ids.length||ids.includes(m));
   if(!list.length)list=P.pref;
-  _modelCache[o.engine]=list;return list;
+  _modelCache[o.engine]=list;return pick.concat(list.filter(m=>m!==pick[0]));
 }
 async function chatJSON(o,system,user){
   const P=CLOUD[o.engine],models=await chatModels(o);let lastErr=null;
@@ -46,15 +48,31 @@ async function chatJSON(o,system,user){
   }
   throw lastErr||new Error('IA indisponível');
 }
+const NOT_CHAT=/whisper|tts|orpheus|guard|safeguard|embed|moderation|transcribe|distil/i;
+async function listModels(o){
+  const P=CLOUD[o.engine];if(!o.key)throw new Error('Cola a chave API primeiro.');
+  const r=await fetch(P.models,{headers:{Authorization:'Bearer '+o.key}});
+  if(!r.ok)throw new Error(r.status===401?'Chave API inválida.':'Erro '+r.status);
+  const j=await r.json(),ids=(j.data||[]).map(m=>m.id).sort();
+  CFG.modelIds=ids;CFG.modelsAt=Date.now();saveCFG();return ids;
+}
+const sttOptions=()=>{const a=(CFG.modelIds||[]).filter(x=>/whisper|transcribe|stt/i.test(x));return a.length?a:['whisper-large-v3','whisper-large-v3-turbo'];};
+const chatOptions=()=>(CFG.modelIds||[]).filter(x=>!NOT_CHAT.test(x));
+function normalizeAudio(a){
+  let pk=0;for(let i=0;i<a.length;i+=8){const v=Math.abs(a[i]);if(v>pk)pk=v;}
+  if(pk<0.02||pk>0.7)return a;
+  const g=Math.min(0.9/pk,10),o=new Float32Array(a.length);
+  for(let i=0;i<a.length;i++)o[i]=Math.max(-1,Math.min(1,a[i]*g));
+  return o;
+}
 function whisperPrompt(o){
-  let p='';
-  if(o.lang==='pt')p+=(o.variant==='br'?'Transcrição em português do Brasil, com pontuação e acentuação corretas. ':'Transcrição em português de Portugal, com pontuação e acentuação corretas. ');
-  if(o.prompt)p+='Vocabulário: '+o.prompt+'.';
-  return p.slice(0,600).trim();
+  /* sem frase-modelo: o Whisper pode repeti-la/perder o início. Só vocabulário. */
+  return o.prompt?('Vocabulário: '+o.prompt+'.').slice(0,500):'';
 }
 async function cloudASR(audio,o,status){
   const P=CLOUD[o.engine];if(!o.key)throw new Error('Cola a chave API da '+P.label+'.');
   const model=o.engine==='openai'?'whisper-1':(o.cloudModel||'whisper-large-v3');
+  status('Modelo: '+model+' · a enviar áudio…');
   const sr=16000,CH=600*sr,words=[],prompt=whisperPrompt(o);
   for(let off=0,i=0;off<audio.length;off+=CH,i++){
     status(`A enviar áudio para ${P.label} (parte ${i+1}/${Math.ceil(audio.length/CH)})…`);
@@ -71,10 +89,18 @@ async function cloudASR(audio,o,status){
     catch(e){throw new Error('Sem ligação ao serviço '+P.label+' (rede ou bloqueio do navegador).');}
     if(!r.ok){const tx=(await r.text()).slice(0,200);throw new Error(r.status===401?'Chave API inválida.':r.status===429?'Limite do Groq atingido (aguarda um pouco).':`Erro ${r.status}: ${tx}`);}
     const j=await r.json(),base=off/sr;
-    const bad=(j.segments||[]).filter(s=>(s.no_speech_prob>0.6&&s.avg_logprob<-0.7)||s.compression_ratio>2.4);
+    const bad=(j.segments||[]).filter(s=>(s.no_speech_prob>0.9&&s.avg_logprob<-1.3)||s.compression_ratio>3.5);
     const isBad=t=>bad.some(s=>t>=s.start-0.05&&t<=s.end+0.05);
-    if(j.words&&j.words.length)j.words.forEach(w=>{const t=String(w.word).trim();if(t&&!isBad(w.start))words.push({w:t,s:w.start+base,e:w.end+base});});
-    else if(j.segments)j.segments.filter(s=>!bad.includes(s)).forEach(sg=>{const ws=String(sg.text).trim().split(/\s+/).filter(Boolean);const d=(sg.end-sg.start)/Math.max(1,ws.length);ws.forEach((w,k)=>words.push({w,s:sg.start+base+k*d,e:sg.start+base+(k+1)*d}));});
+    const cw=[];
+    if(j.words&&j.words.length)j.words.forEach(w=>{const t=String(w.word).trim();if(t&&!isBad(w.start))cw.push({w:t,s:w.start+base,e:w.end+base});});
+    /* cobertura: segmentos sem palavras (ex.: início do vídeo) entram a partir do texto do segmento */
+    (j.segments||[]).filter(s=>!bad.includes(s)).forEach(sg=>{
+      const a=sg.start+base,b2=sg.end+base;
+      if(cw.some(w=>w.s>=a-0.1&&w.s<b2-0.05))return;
+      const ws=String(sg.text).trim().split(/\s+/).filter(Boolean);if(!ws.length)return;
+      const d=(b2-a)/ws.length;ws.forEach((w,k)=>cw.push({w,s:a+k*d,e:a+(k+1)*d}));
+    });
+    cw.sort((p,q)=>p.s-q.s);words.push(...cw);
   }
   return words;
 }
@@ -172,10 +198,11 @@ async function autoCaptions(o,status){
   status('A preparar o áudio…');
   const ab=await mixAudio(16000,1);
   if(!ab)throw new Error('Sem áudio para transcrever (volume a 0 ou formato não suportado).');
-  const audio=ab.getChannelData(0);
+  const audio=normalizeAudio(ab.getChannelData(0));
   const words=o.engine==='local'?await localASR(audio,o,status):await cloudASR(audio,o,status);
   if(!words.length)throw new Error('Não foi detetada fala.');
   const segs=groupWords(words,o);
+  status(`Primeira palavra aos ${words[0].s.toFixed(2)} s · ${words.length} palavras.`);
   if(o.engine!=='local'&&o.fix){const n=await aiFix(segs,o,status);status(`Pronto. ${n} legendas corrigidas pela IA.`);}
   return segs;
 }

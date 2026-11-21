@@ -71,7 +71,17 @@ precision mediump float;
 #endif
 varying vec2 uv;uniform sampler2D tex;uniform vec2 uRes,uScale,uOff;
 uniform float uBright,uContrast,uSat,uTemp,uVig,uGrain,uRgb,uBw,uSepia,uBlur,uFade,uFlash,uTime,uMirror,uPix,uRot,uWave,uInvert,uPoster;
-vec3 S(vec2 c){return texture2D(tex,c).rgb;}
+uniform vec2 uTexSize;uniform float uBic;
+vec3 S(vec2 c){
+ if(uBic<0.5)return texture2D(tex,c).rgb;
+ vec2 pos=c*uTexSize;vec2 c1=floor(pos-0.5)+0.5;vec2 f=pos-c1;
+ vec2 w0=f*(-0.5+f*(1.0-0.5*f));vec2 w1=1.0+f*f*(-2.5+1.5*f);vec2 w2=f*(0.5+f*(2.0-1.5*f));vec2 w3=f*f*(-0.5+0.5*f);
+ vec2 w12=w1+w2;vec2 t0=(c1-1.0)/uTexSize;vec2 t12=(c1+w2/w12)/uTexSize;vec2 t3=(c1+2.0)/uTexSize;
+ vec3 r=texture2D(tex,vec2(t0.x,t0.y)).rgb*(w0.x*w0.y)+texture2D(tex,vec2(t12.x,t0.y)).rgb*(w12.x*w0.y)+texture2D(tex,vec2(t3.x,t0.y)).rgb*(w3.x*w0.y)
+ +texture2D(tex,vec2(t0.x,t12.y)).rgb*(w0.x*w12.y)+texture2D(tex,vec2(t12.x,t12.y)).rgb*(w12.x*w12.y)+texture2D(tex,vec2(t3.x,t12.y)).rgb*(w3.x*w12.y)
+ +texture2D(tex,vec2(t0.x,t3.y)).rgb*(w0.x*w3.y)+texture2D(tex,vec2(t12.x,t3.y)).rgb*(w12.x*w3.y)+texture2D(tex,vec2(t3.x,t3.y)).rgb*(w3.x*w3.y);
+ return clamp(r,0.0,1.0);
+}
 void main(){
  vec2 q=uv;
  if(uMirror>0.5&&q.x>0.5)q.x=1.0-q.x;
@@ -117,7 +127,7 @@ void main(){
   const loc=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
   const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
   [[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE],[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR]].forEach(a=>gl.texParameteri(gl.TEXTURE_2D,a[0],a[1]));
-  const U={};['uRes','uScale','uOff','uBright','uContrast','uSat','uTemp','uVig','uGrain','uRgb','uBw','uSepia','uBlur','uFade','uFlash','uTime','uMirror','uPix','uRot','uWave','uInvert','uPoster'].forEach(n=>U[n]=gl.getUniformLocation(pr,n));
+  const U={};['uRes','uScale','uOff','uBright','uContrast','uSat','uTemp','uVig','uGrain','uRgb','uBw','uSepia','uBlur','uFade','uFlash','uTime','uMirror','uPix','uRot','uWave','uInvert','uPoster','uTexSize','uBic'].forEach(n=>U[n]=gl.getUniformLocation(pr,n));
   const out=outCanvas||document.createElement('canvas');out.width=w;out.height=h;
   const ctx=out.getContext('2d');
   return{w,h,out,ctx,
@@ -125,6 +135,8 @@ void main(){
     draw(img,p){
       gl.viewport(0,0,w,h);
       if(img&&(img.readyState===undefined||img.readyState>=2)){gl.bindTexture(gl.TEXTURE_2D,tex);try{gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);}catch(e){}}
+      {const iw=img&&(img.videoWidth||img.naturalWidth||img.width)||0,ih=img&&(img.videoHeight||img.naturalHeight||img.height)||0;
+       gl.uniform2f(U.uTexSize,iw||1,ih||1);gl.uniform1f(U.uBic,(iw&&w/(iw*Math.abs(p.sx))>1.05)?1:0);}
       gl.uniform2f(U.uRes,w,h);gl.uniform2f(U.uScale,p.sx,p.sy);gl.uniform2f(U.uOff,p.ox,p.oy);
       const f=p.fx;
       gl.uniform1f(U.uBright,f.bright);gl.uniform1f(U.uContrast,f.contrast);gl.uniform1f(U.uSat,f.sat);gl.uniform1f(U.uTemp,f.temp);
@@ -279,12 +291,15 @@ const NEWS_FONTS=['Playfair Display','Special Elite','Oswald','Montserrat','Sato
 const CAP_PRESETS={
   pop:{n:'Pop',upper:1,stroke:1,hiMode:'color',pop:1,font:'Montserrat'},
   impact:{n:'Impacto',upper:1,stroke:2,hiMode:'color',pop:1,font:'Anton'},
-  news:{n:'Jornal (acumula)',news:1,reveal:1,upper:1,hiMode:'none',font:'Anton'},
-  news1:{n:'Jornal (1 palavra)',news:1,single:1,upper:1,hiMode:'none',font:'Anton'},
-  news2:{n:'Jornal · caixas retas',news2:1,reveal:1,upper:1,hiMode:'none',font:'Anton'},
-  news3:{n:'Jornal · caixa 1 palavra',news2:1,single:1,upper:1,hiMode:'none',font:'Anton'},
-  news4:{n:'Jornal · destaque em caixa',news2:2,upper:1,hiMode:'none',font:'Anton'},
-  news5:{n:'Jornal · fita',strip:1,upper:1,hiMode:'none',font:'Anton'},
+  news:{n:'Jornal (acumula)',news:1,reveal:1,upper:1,hiMode:'none',font:'Playfair Display'},
+  news1:{n:'Jornal (1 palavra)',news:1,single:1,upper:1,hiMode:'none',font:'Playfair Display'},
+  news2:{n:'Jornal · caixas retas',news2:1,reveal:1,upper:1,hiMode:'none',font:'Playfair Display'},
+  news3:{n:'Jornal · caixa 1 palavra',news2:1,single:1,upper:1,hiMode:'none',font:'Playfair Display'},
+  news4:{n:'Jornal · destaque em caixa',news2:2,upper:1,hiMode:'none',font:'Playfair Display'},
+  news5:{n:'Jornal · fita',strip:1,upper:1,hiMode:'none',font:'Playfair Display'},
+  news6:{n:'Jornal · máquina de escrever',news2:1,reveal:1,upper:1,hiMode:'none',font:'Special Elite'},
+  news7:{n:'Jornal · condensado',news2:1,reveal:1,upper:1,hiMode:'none',font:'Oswald'},
+  news8:{n:'Jornal · moderno',news2:1,reveal:1,upper:1,hiMode:'none',font:'Montserrat'},
   pill:{n:'Pílula',hiMode:'pill',pop:1,font:'Montserrat'},
   wordbox:{n:'Caixas',wordBox:1,hiMode:'pill',font:'Montserrat'},
   karaoke:{n:'Karaoke',upper:1,stroke:1,hiMode:'color',font:'Montserrat'},
@@ -311,7 +326,7 @@ const TEXT_STYLES={
 };
 function newsToken(word,i,pal,active,upper){
   const h=hashStr(word+'#'+i),col=pal[i%pal.length];
-  return{t:upper?word.toUpperCase():word,cut:col,c:lum(col)>0.5?'#111111':'#ffffff',font:NEWS_FONTS[h%NEWS_FONTS.length],rot:((h%1000)/1000-0.5)*0.08,seed:h,sc:active?1.1:1};
+  return{t:upper?word.toUpperCase():word,bg:col,box:1,c:lum(col)>0.5?'#111111':'#ffffff',trot:((h%1000)/1000-0.5)*0.04,seed:h,sc:1};
 }
 function palOf(cs){const a=(cs.bgColors&&cs.bgColors.length?cs.bgColors:BG_PALETTES.jornal.c);return cs.bgMode==='single'?[a[0]]:a;}
 function buildCaption(ws,t,cs){
@@ -330,11 +345,11 @@ function buildCaption(ws,t,cs){
     if(pr.news2){
       const h=hashStr(w.w+'#'+i);let col=pal[i%pal.length];
       if(pr.news2===2)col=act?hi:pal[0];
-      return{t:up?w.w.toUpperCase():w.w,bg:col,box:1,c:lum(col)>0.5?'#111111':'#ffffff',font:NEWS_FONTS[h%NEWS_FONTS.length],trot:((h%1000)/1000-0.5)*0.06,sc:act?1.06:1};
+      return{t:up?w.w.toUpperCase():w.w,bg:col,box:1,c:lum(col)>0.5?'#111111':'#ffffff',trot:((h%1000)/1000-0.5)*0.04,sc:1};
     }
     if(pr.strip){
       const h=hashStr(w.w+'#'+i);
-      return{t:up?w.w.toUpperCase():w.w,c:lum(pal[0])>0.5?'#111111':'#ffffff',font:NEWS_FONTS[h%NEWS_FONTS.length],trot:((h%1000)/1000-0.5)*0.06,sc:act?1.06:1};
+      return{t:up?w.w.toUpperCase():w.w,c:lum(pal[0])>0.5?'#111111':'#ffffff',trot:((h%1000)/1000-0.5)*0.04,sc:1};
     }
     const tk={t:up?w.w.toUpperCase():w.w,c:dark?'#111111':(pr.colorHi?hi:base),sc:1};
     if(pr.wordBox)tk.bg='rgba(0,0,0,0.62)';
@@ -350,18 +365,18 @@ function buildCaption(ws,t,cs){
     bg:pr.boxBg?'rgba(0,0,0,0.62)':(pr.bgHi?hi:(pr.strip?pal[0]:null)),y:cs.y,maxLines:pr.single?1:2,maxW:pr.news?0.88:0.82,offset3d:!!pr.retro};
   return{tokens,opts};
 }
+function drawTextObj(ctx,W,H,x,l){
+  let alpha=1,scale=1,dy=0,txt=x.text;
+  if(x.anim==='pop'){scale=0.7+0.3*Math.min(1,ease(l/0.3)*1.1);alpha=Math.min(1,l/0.15);}
+  else if(x.anim==='fade'){alpha=Math.min(1,l/0.4)*Math.min(1,(x.dur-l)/0.3);}
+  else if(x.anim==='slide'){dy=(1-ease(l/0.35))*1.2;alpha=Math.min(1,l/0.2);}
+  else if(x.anim==='type'){txt=x.text.slice(0,Math.floor(x.text.length*Math.min(1,l/Math.max(0.3,Math.min(x.dur*0.6,2)))));}
+  const tk=[],pal=palOf(S.capStyle);let wi=0;
+  txt.split('\n').forEach((ln,i)=>{if(i)tk.push({t:'\n'});ln.split(/\s+/).filter(Boolean).forEach(w=>{tk.push(x.cut?newsToken(w,wi,pal,false,false):{t:w});wi++;});});
+  drawRich(ctx,W,H,tk,{normal:!!x.cut,px:x.size,font:x.font,bold:x.bold&&!x.cut,color:x.color,bg:x.bg,stroke:x.stroke?1:0,shadow:!x.bg&&!x.stroke&&!x.cut,y:x.y,alpha,scale,dy,glow:x.glow||null,glowColor:x.glow||null});
+}
 function drawOverlays(ctx,W,H,t){
-  for(const x of S.texts){
-    const l=t-x.start;if(l<0||l>=x.dur)continue;
-    let alpha=1,scale=1,dy=0,txt=x.text;
-    if(x.anim==='pop'){scale=0.7+0.3*Math.min(1,ease(l/0.3)*1.1);alpha=Math.min(1,l/0.15);}
-    else if(x.anim==='fade'){alpha=Math.min(1,l/0.4)*Math.min(1,(x.dur-l)/0.3);}
-    else if(x.anim==='slide'){dy=(1-ease(l/0.35))*1.2;alpha=Math.min(1,l/0.2);}
-    else if(x.anim==='type'){txt=x.text.slice(0,Math.floor(x.text.length*Math.min(1,l/Math.max(0.3,Math.min(x.dur*0.6,2)))));}
-    const tk=[],pal=palOf(S.capStyle);let wi=0;
-    txt.split('\n').forEach((ln,i)=>{if(i)tk.push({t:'\n'});ln.split(/\s+/).filter(Boolean).forEach(w=>{tk.push(x.cut?newsToken(w,wi,pal,false,false):{t:w});wi++;});});
-    drawRich(ctx,W,H,tk,{normal:!!x.cut,px:x.size,font:x.font,bold:x.bold&&!x.cut,color:x.color,bg:x.bg,stroke:x.stroke?1:0,shadow:!x.bg&&!x.stroke&&!x.cut,y:x.y,alpha,scale,dy,glow:x.glow||null,glowColor:x.glow||null});
-  }
+  for(const x of S.texts){const l=t-x.start;if(l<0||l>=x.dur)continue;drawTextObj(ctx,W,H,x,l);}
   const cs=S.capStyle,tt=t+(cs.offset||0);
   const seg=S.caps.find(s=>tt>=s.start&&tt<s.end);
   if(seg){const b=buildCaption(segWords(seg),tt,cs);drawRich(ctx,W,H,b.tokens,b.opts);}
@@ -371,36 +386,41 @@ function thumbBg(cv){
   const W=cv.width,H=cv.height,ctx=cv.getContext('2d');
   const g=ctx.createLinearGradient(0,0,W,H);g.addColorStop(0,'#3a4a5a');g.addColorStop(1,'#1b222b');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);return ctx;
 }
-function drawStyleThumb(cv,key){
-  const ctx=thumbBg(cv);
-  const ws=[{w:'Isto',s:0,e:1},{w:'é',s:1,e:2},{w:'um',s:2,e:3},{w:'teste',s:3,e:4}];
+function drawStyleThumb(cv,key,t){
+  t=t||0;const ctx=thumbBg(cv);
+  const ws=[{w:'Isto',s:0,e:0.7},{w:'é',s:0.7,e:1.3},{w:'um',s:1.3,e:1.9},{w:'teste',s:1.9,e:2.8}];
   const cs=Object.assign({},S.capStyle,{preset:key,y:50,size:Math.min(S.capStyle.size,80)});
-  const b=buildCaption(ws,1.5,cs);b.opts.maxW=0.94;drawRich(ctx,cv.width,cv.height,b.tokens,b.opts);
+  const b=buildCaption(ws,t%3.4,cs);b.opts.maxW=0.94;drawRich(ctx,cv.width,cv.height,b.tokens,b.opts);
 }
-function drawTextThumb(cv,key){
-  const ctx=thumbBg(cv),st=TEXT_STYLES[key],pal=palOf(S.capStyle);
-  const tk=['Texto','novo'].map((w,i)=>st.cut?newsToken(w,i,pal,false,false):{t:w});
-  drawRich(ctx,cv.width,cv.height,tk,{normal:!!st.cut,px:90,font:st.font,bold:st.bold&&!st.cut,color:st.color,bg:st.bg,stroke:st.stroke?1:0,shadow:!st.bg&&!st.stroke&&!st.cut,y:50,glow:st.glow||null,glowColor:st.glow||null,maxW:0.94});
+function drawTextThumb(cv,key,t){
+  t=t||0;const ctx=thumbBg(cv),st=TEXT_STYLES[key];
+  const x=Object.assign({text:'Texto novo',size:90,y:50,start:0,dur:3,anim:'type'},st);
+  drawTextObj(ctx,cv.width,cv.height,x,Math.min(t%3.6,2.99));
 }
 let _tc=null,TH=null;
-function testCard(){
-  if(_tc)return _tc;
-  const c=document.createElement('canvas');c.width=256;c.height=144;const x=c.getContext('2d');
+function testCard(t){
+  t=t||0;
+  if(!_tc){_tc=document.createElement('canvas');_tc.width=256;_tc.height=144;}
+  const x=_tc.getContext('2d');
   const g=x.createLinearGradient(0,0,0,144);g.addColorStop(0,'#5aa9e6');g.addColorStop(0.6,'#f6c177');g.addColorStop(1,'#2d6a4f');x.fillStyle=g;x.fillRect(0,0,256,144);
-  x.fillStyle='#ffe066';x.beginPath();x.arc(60,50,22,0,7);x.fill();x.fillStyle='#1b4332';x.beginPath();x.moveTo(0,144);x.lineTo(90,70);x.lineTo(170,144);x.fill();x.fillStyle='#d8572a';x.fillRect(150,88,60,40);x.fillStyle='#8c2f1b';x.beginPath();x.moveTo(144,88);x.lineTo(180,62);x.lineTo(216,88);x.fill();
-  _tc=c;return c;
+  x.fillStyle='#ffe066';x.beginPath();x.arc(30+((t*28)%200),42,20,0,7);x.fill();
+  x.fillStyle='#1b4332';x.beginPath();x.moveTo(0,144);x.lineTo(90,70);x.lineTo(170,144);x.fill();
+  x.fillStyle='#d8572a';x.fillRect(150,88,60,40);x.fillStyle='#8c2f1b';x.beginPath();x.moveTo(144,88);x.lineTo(180,62);x.lineTo(216,88);x.fill();
+  x.fillStyle='#e63da0';x.beginPath();x.arc(60+Math.abs(Math.sin(t*2))*0+((t*40)%140),118-Math.abs(Math.sin(t*3.2))*46,10,0,7);x.fill();
+  return _tc;
 }
-function thumbSource(){
+function thumbSource(t){
   const c=typeof selClip==='function'?selClip():null;
   if(c){const s=SRC[c.src];if(s&&s.video.readyState>=2)return{img:s.video,vw:s.vw,vh:s.vh};}
-  return{img:testCard(),vw:256,vh:144};
+  return{img:testCard(t),vw:256,vh:144};
 }
-function drawFxThumb(cv,fx,trType){
-  if(!TH)TH=createRenderer(cv.width,cv.height);
-  const src=thumbSource();
-  const full=Object.assign({},FX_DEFAULT,fx);
+function drawFxThumb(cv,fx,trType,t){
+  t=t||0;if(!TH)TH=createRenderer(cv.width,cv.height);
+  const src=thumbSource(t),full=Object.assign({},FX_DEFAULT,fx);
+  const isTr=!!trType&&trType!=='none';
   const fake={fx:full,trans:{type:trType||'none',dur:1},kb:0,dur:5};
-  const p=sceneParams(fake,trType&&trType!=='none'?0.35:1.5,cv.width/cv.height,src);
+  const p=sceneParams(fake,isTr?(t%1.9):1.5,cv.width/cv.height,src);
+  if(!isTr){p.ox+=0.04*Math.sin(t*1.7);p.oy+=0.03*Math.cos(t*1.3);const z=0.94-0.04*Math.sin(t*1.1);p.sx*=z;p.sy*=z;p.time=t*24;}
   TH.draw(src.img,p);
   cv.getContext('2d').drawImage(TH.out,0,0);
 }
