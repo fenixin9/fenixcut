@@ -19,6 +19,35 @@ async function pickCodec(w,h,fps,bitrate){
   }
   return null;
 }
+
+/* ---------- nitidez (evita vídeo "mole" no ficheiro final) ---------- */
+function makeSharpener(w,h,amount){
+  try{
+    const c=document.createElement('canvas');c.width=w;c.height=h;
+    const gl=c.getContext('webgl',{alpha:false,preserveDrawingBuffer:true,antialias:false});
+    if(!gl)return null;
+    const vs='attribute vec2 p;varying vec2 uv;void main(){uv=vec2(p.x*.5+.5,1.-(p.y*.5+.5));gl_Position=vec4(p,0.,1.);}';
+    const fs='precision highp float;varying vec2 uv;uniform sampler2D tex;uniform vec2 px;uniform float a;void main(){vec3 c=texture2D(tex,uv).rgb;vec3 s=texture2D(tex,uv+vec2(px.x,0.)).rgb+texture2D(tex,uv-vec2(px.x,0.)).rgb+texture2D(tex,uv+vec2(0.,px.y)).rgb+texture2D(tex,uv-vec2(0.,px.y)).rgb;gl_FragColor=vec4(clamp(c*(1.+4.*a)-a*s,0.,1.),1.);}';
+    const sh=(t,s)=>{const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(o));return o;};
+    const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(pr);
+    if(!gl.getProgramParameter(pr,gl.LINK_STATUS))throw new Error('link');
+    gl.useProgram(pr);
+    const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+    const l=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,2,gl.FLOAT,false,0,0);
+    const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
+    [[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE],[gl.TEXTURE_MIN_FILTER,gl.NEAREST],[gl.TEXTURE_MAG_FILTER,gl.NEAREST]].forEach(x=>gl.texParameteri(gl.TEXTURE_2D,x[0],x[1]));
+    gl.uniform2f(gl.getUniformLocation(pr,'px'),1/w,1/h);gl.uniform1f(gl.getUniformLocation(pr,'a'),amount);
+    gl.viewport(0,0,w,h);
+    return{out:c,run(src){gl.bindTexture(gl.TEXTURE_2D,tex);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,src);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);},
+      dispose(){const x=gl.getExtension('WEBGL_lose_context');if(x)x.loseContext();}};
+  }catch(err){console.warn('sharpener',err);return null;}
+}
+function sharpAmount(w,h){
+  let src=0;for(const id in SRC)src=Math.max(src,Math.min(SRC[id].vw,SRC[id].vh));
+  if(!src)return 0.25;
+  const ratio=Math.min(w,h)/src;
+  return ratio>1.1?0.55:(ratio<0.8?0.3:0.25);
+}
 async function importAny(urls,test){
   for(const u of urls){try{const m=await import(u);if(test(m))return m;}catch(e){console.warn('import falhou',u,e);}}
   return null;
@@ -82,10 +111,12 @@ async function exportMB(o,onProg,ctl){
   const vcodec=await MB.getFirstEncodableVideoCodec(format.getSupportedVideoCodecs(),{width:w,height:h});
   if(!vcodec)throw new Error(`Este aparelho não codifica ${w}×${h}`);
   const R=createRenderer(w,h);
+  const SH=makeSharpener(w,h,sharpAmount(w,h)),srcCv=SH?SH.out:R.out;
   const output=new MB.Output({format,target:new MB.BufferTarget()});
   let vs;
-  try{vs=new MB.CanvasSource(R.out,{codec:vcodec,bitrate:o.bitrate});}
-  catch(e){vs=new MB.CanvasSource(R.out,{codec:vcodec,quality:new MB.Quality('high')});}
+  const cfgs=[{codec:vcodec,bitrate:o.bitrate,latencyMode:'quality',bitrateMode:'variable',keyFrameInterval:2},{codec:vcodec,bitrate:o.bitrate}];
+  for(const cf of cfgs){try{vs=new MB.CanvasSource(srcCv,cf);break;}catch(err){console.warn('CanvasSource',err);}}
+  if(!vs)vs=new MB.CanvasSource(srcCv,{codec:vcodec,quality:new MB.Quality('very-high')});
   output.addVideoTrack(vs,{frameRate:fps});
   let abuf=null,as=null;
   if(o.audio){
@@ -105,6 +136,7 @@ async function exportMB(o,onProg,ctl){
       const emit=async(i,img)=>{
         if(ctl.cancel)throw new Error('cancelado');
         renderScene(R,i/fps,{clip:c,img});
+        if(SH)SH.run(R.out);
         await vs.add(i/fps,1/fps);
         done++;if(done%3===0){onProg(done/N*(abuf?0.94:0.98),`A processar frame ${done}/${N}`);await sleep(0);}
       };
@@ -126,7 +158,7 @@ async function exportMB(o,onProg,ctl){
     onProg(1,'Concluído');
     return{blob:new Blob([output.target.buffer],{type:'video/mp4'}),ext:'mp4'};
   }catch(e){try{await output.cancel();}catch(_){}throw e;}
-  finally{R.dispose();}
+  finally{R.dispose();if(SH)SH.dispose();}
 }
 async function exportWebCodecs(o,onProg,ctl){
   const{w,h,fps,cfg}=o;const total=S.total,N=Math.max(1,Math.ceil(total*fps-1e-6));
@@ -140,8 +172,9 @@ async function exportWebCodecs(o,onProg,ctl){
   const muxer=new Muxer({target,video:{codec:'avc',width:w,height:h},...(abuf?{audio:{codec:'aac',numberOfChannels:2,sampleRate:48000}}:{}),fastStart:'in-memory'});
   let fail=null;
   const venc=new VideoEncoder({output:(c,m)=>muxer.addVideoChunk(c,m),error:e=>{fail=e;}});
-  venc.configure(cfg);
+  venc.configure(Object.assign({},cfg,{latencyMode:'quality',bitrateMode:'variable'}));
   const R=createRenderer(w,h);
+  const SH=makeSharpener(w,h,sharpAmount(w,h));
   try{
     for(let n=0;n<N;n++){
       if(ctl.cancel)throw new Error('cancelado');
@@ -149,7 +182,8 @@ async function exportWebCodecs(o,onProg,ctl){
       const t=n/fps,c=clipAt(t);
       if(c){const v=SRC[c.src].video;v.pause();v.muted=true;await seekTo(v,srcTimeAt(c,t));}
       renderScene(R,t);
-      const vf=new VideoFrame(R.out,{timestamp:Math.round(n*1e6/fps),duration:Math.round(1e6/fps)});
+      if(SH)SH.run(R.out);
+      const vf=new VideoFrame(SH?SH.out:R.out,{timestamp:Math.round(n*1e6/fps),duration:Math.round(1e6/fps)});
       venc.encode(vf,{keyFrame:n%(fps*2)===0});vf.close();
       while(venc.encodeQueueSize>8){await sleep(4);if(fail)throw fail;}
       if(n%4===0){onProg(n/N*(abuf?0.92:0.97),`A codificar frame ${n+1}/${N}`);await sleep(0);}
@@ -171,13 +205,14 @@ async function exportWebCodecs(o,onProg,ctl){
     muxer.finalize();venc.close();
     onProg(1,'Concluído');
     return{blob:new Blob([target.buffer],{type:'video/mp4'}),ext:'mp4'};
-  }finally{R.dispose();try{venc.state!=='closed'&&venc.close();}catch(e){}}
+  }finally{R.dispose();if(SH)SH.dispose();try{venc.state!=='closed'&&venc.close();}catch(e){}}
 }
 const _nodes={};
 async function exportRealtime(o,onProg,ctl){
   const{w,h,fps,bitrate}=o;const total=S.total;
   const R=createRenderer(w,h);
-  const stream=R.out.captureStream(fps);
+  const SH=makeSharpener(w,h,sharpAmount(w,h));
+  const stream=(SH?SH.out:R.out).captureStream(fps);
   const AC=new(window.AudioContext||window.webkitAudioContext)();
   const dest=AC.createMediaStreamDestination();
   const used=[...new Set(S.clips.map(c=>c.src))];
@@ -197,7 +232,7 @@ async function exportRealtime(o,onProg,ctl){
         if(ctl.cancel){rej(new Error('cancelado'));return;}
         const t=(performance.now()-t0)/1000;
         if(t>=total){res();return;}
-        syncPlayback(t,ACT,false);renderScene(R,t);
+        syncPlayback(t,ACT,false);renderScene(R,t);if(SH)SH.run(R.out);
         onProg(t/total,`Gravação em tempo real ${Math.round(t)}s / ${Math.round(total)}s (não saias desta página)`);
         requestAnimationFrame(loop);
       };
@@ -207,11 +242,16 @@ async function exportRealtime(o,onProg,ctl){
     rec.state!=='inactive'&&rec.stop();await stopped;
     S.clips.forEach(c=>SRC[c.src].video.pause());
     for(const id of used){_nodes[id].disconnect();_nodes[id].connect(AC.destination);}
-    R.dispose();
+    R.dispose();if(SH)SH.dispose();
   }
   return{blob:new Blob(chunks,{type:mime.split(';')[0]}),ext:mime.includes('mp4')?'mp4':'webm'};
 }
 async function runExport(o,set,ctl){
+  /* débito mais alto: o anterior deixava o vídeo desfocado */
+  const mp=o.w*o.h/1e6;
+  o.bitrate=Math.round(Math.min(Math.max(o.bitrate*2,mp*6e6),mp*22e6,90e6));
+  let srcShort=0;for(const id in SRC)srcShort=Math.max(srcShort,Math.min(SRC[id].vw,SRC[id].vh));
+  if(srcShort&&Math.min(o.w,o.h)>srcShort*1.15)toast(`O vídeo original tem ${srcShort}p; exportar em ${Math.min(o.w,o.h)}p aumenta o tamanho mas não cria detalhe. Para máxima nitidez exporta na resolução original.`,7000);
   if(o.method!=='rt'){
     try{return await exportMB(o,set,ctl);}catch(e){if(e.message==='cancelado')throw e;console.warn('MB',e);logErr('export rápido: '+e.message);}
     const cfg=await pickCodec(o.w,o.h,o.fps,o.bitrate);
