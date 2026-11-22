@@ -1,4 +1,4 @@
-/* FenixCut V21 — Recuperar roupa e zonas apagadas no removedor de fundo, por cor. Loaded after studio-bg.js. */
+/* FenixCut V22 — Recuperar roupa e zonas apagadas no removedor de fundo, por cor (iterativo, com modo reforçado). Loaded after studio-bg.js. */
 'use strict';
 (function(){
  if(typeof window.FenixBg==='undefined'||typeof window.FenixBg._E!=='function')return;
@@ -42,43 +42,57 @@
   ctx.fillStyle='#fff';ctx.beginPath();poly.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.closePath();ctx.fill();
   const d=ctx.getImageData(0,0,w,h).data,out=new Uint8Array(w*h);for(let i=0;i<out.length;i++)out[i]=d[i*4+3]>128?1:0;return out;
  }
+ function grow(big,cand,w,h){
+  const n=w*h,queue=new Int32Array(n),seen=new Uint8Array(n),rest=new Uint8Array(n);let head=0,tail=0,added=0;
+  for(let i=0;i<n;i++)if(big[i]){seen[i]=1;queue[tail++]=i;}
+  while(head<tail){const p=queue[head++],x=p%w,y=(p-x)/w;
+   const add=q=>{if(!seen[q]&&cand[q]){seen[q]=1;rest[q]=1;added++;queue[tail++]=q;}};
+   if(x>0)add(p-1);if(x<w-1)add(p+1);if(y>0)add(p-w);if(y<h-1)add(p+w);}
+  return {rest,added};
+ }
  function colorRestore(data,w,h,raw,thr,info){
   const n=w*h,m=new Uint8Array(n);for(let i=0;i<n;i++)m[i]=raw[i]>=128?1:0;
   const big=bigComponents(m,w,h,Math.round(n*.02)),hull=hullMask(big,w,h);
   if(!hull)return raw;
-  const core=morphBin(big,w,h,8,false),hullFar=morphBin(hull,w,h,12,true);
-  const fg=new Float64Array(4096).fill(.5),bg=new Float64Array(4096).fill(.5);let nf=0,nb=0;
-  const bin=i=>((data[i*4]>>4)<<8)|((data[i*4+1]>>4)<<4)|(data[i*4+2]>>4);
-  for(let i=0;i<n;i++){if(core[i]){fg[bin(i)]++;nf++;}else if(!hullFar[i]){bg[bin(i)]++;nb++;}}
-  if(info){info.coreSamples=nf;info.bgSamples=nb;}
-  if(nf<500||nb<500)return raw;
-  let sf=0,sb=0;for(let k=0;k<4096;k++){sf+=fg[k];sb+=bg[k];}
-  const lr=new Float32Array(n);for(let i=0;i<n;i++){if(hull[i]){const k=bin(i),pf=fg[k]/sf,pb=bg[k]/sb;lr[i]=pf/(pf+pb);}}
-  const lrs=blurF(lr,w,h,2),cand=new Uint8Array(n);for(let i=0;i<n;i++)if(hull[i]&&!m[i]&&lrs[i]>thr)cand[i]=1;
-  const out=Uint8ClampedArray.from(raw),queue=new Int32Array(n),seen=new Uint8Array(n),rest=new Float32Array(n);let head=0,tail=0,added=0;
-  for(let i=0;i<n;i++)if(big[i]){seen[i]=1;queue[tail++]=i;}
-  while(head<tail){const p=queue[head++],x=p%w,y=(p-x)/w;
-   const add=q=>{if(!seen[q]&&cand[q]){seen[q]=1;rest[q]=255;added++;queue[tail++]=q;}};
-   if(x>0)add(p-1);if(x<w-1)add(p+1);if(y>0)add(p-w);if(y<h-1)add(p+w);}
-  const soft=added?blurF(rest,w,h,2):null;if(soft)for(let i=0;i<n;i++){const v=soft[i];if(v>out[i])out[i]=Math.min(255,Math.round(v*1.15));}
-  if(info)info.restored=added;
+  const hullFar=morphBin(hull,w,h,12,true),bin=i=>((data[i*4]>>4)<<8)|((data[i*4+1]>>4)<<4)|(data[i*4+2]>>4);
+  const bgh=new Float64Array(4096).fill(.5);let nb=0,hullN=0,bigN=0;
+  for(let i=0;i<n;i++){if(hull[i])hullN++;if(big[i])bigN++;if(!hullFar[i]){bgh[bin(i)]++;nb++;}}
+  if(info){info.bgSamples=nb;}
+  if(nb<500||!hullN)return raw;
+  let sb=0;for(let k=0;k<4096;k++)sb+=bgh[k];for(let k=0;k<4096;k++)bgh[k]/=sb;
+  const eps=clamp((1-thr-.2)*.04,.001,.02);let cur=big,rest=new Uint8Array(n),added=0,boost=false;
+  for(let it=0;it<2;it++){
+   const core=morphBin(cur,w,h,8,false),fgh=new Float64Array(4096).fill(.5);let nf=0;
+   for(let i=0;i<n;i++)if(core[i]){fgh[bin(i)]++;nf++;}
+   if(nf<500)break;
+   let sf=0;for(let k=0;k<4096;k++)sf+=fgh[k];for(let k=0;k<4096;k++)fgh[k]/=sf;
+   const lr=new Float32Array(n);for(let i=0;i<n;i++){if(hull[i]){const k=bin(i);lr[i]=fgh[k]/(fgh[k]+bgh[k]);}}
+   const lrs=blurF(lr,w,h,2),c1=new Uint8Array(n);for(let i=0;i<n;i++)if(hull[i]&&!m[i]&&lrs[i]>thr)c1[i]=1;
+   let g=grow(big,c1,w,h);
+   if((bigN+g.added)/hullN<.95){const c2=Uint8Array.from(c1);for(let i=0;i<n;i++)if(hull[i]&&!m[i]&&bgh[bin(i)]<eps&&lrs[i]>.12)c2[i]=1;g=grow(big,c2,w,h);boost=true;}
+   rest=g.rest;added=g.added;cur=new Uint8Array(n);for(let i=0;i<n;i++)cur[i]=(big[i]||rest[i])?1:0;
+  }
+  if(info){info.restored=added;info.boost=boost;info.solidity=hullN?(bigN+added)/hullN:0;}
+  const out=Uint8ClampedArray.from(raw);
+  if(added){const f=new Float32Array(n);for(let i=0;i<n;i++)if(rest[i])f[i]=255;const soft=blurF(f,w,h,2);for(let i=0;i<n;i++){const v=soft[i];if(v>out[i])out[i]=Math.min(255,Math.round(v*1.15));}}
   return out;
  }
  const STATE=new WeakMap();
+ const say=i=>i.restored!=null?'Recuperados '+i.restored+' pontos'+(i.boost?' (modo reforçado, porque faltava muito).':'.'):'';
  function apply(E){
   const s=STATE.get(E)||{on:true,thr:.55,base:E.raw};STATE.set(E,s);
   if(!s.base)s.base=E.raw;
   const info={};E.raw=s.on?colorRestore(E.data,E.w,E.h,s.base,s.thr,info):s.base;s.info=info;return info;
  }
  function nudge(){const el=document.getElementById('pCut');if(el)el.dispatchEvent(new Event('input',{bubbles:true}));}
- function boxHTML(s){return `<div class="box" id="colorBox"><h3>Recuperar roupa e partes apagadas</h3><p class="hint">Se o recorte comeu parte da roupa ou do corpo, esta correção compara as cores com as do resto da pessoa e do fundo e devolve o que se parece com a pessoa.</p><div class="checks"><label class="chk"><input type="checkbox" id="colorOn" ${s.on?'checked':''}> Recuperar por cor</label></div><label class="rg"><span>Sensibilidade <b id="colorThrOut">${Math.round((1-s.thr)*100)} %</b></span><input type="range" id="colorThr" min="0.3" max="0.85" step="0.01" value="${s.thr}"></label><p class="hint" id="colorInfo">${s.error?'Erro: '+s.error:(s.info&&s.info.restored!=null?'Recuperados '+s.info.restored+' pontos.':'')}</p></div>`;}
+ function boxHTML(s){return `<div class="box" id="colorBox"><h3>Recuperar roupa e partes apagadas</h3><p class="hint">Se o recorte comeu parte da roupa ou do corpo, esta correção compara as cores com as do resto da pessoa e do fundo e devolve o que se parece com a pessoa. Se o recorte falhou muito, entra sozinha em modo reforçado.</p><div class="checks"><label class="chk"><input type="checkbox" id="colorOn" ${s.on?'checked':''}> Recuperar por cor</label></div><label class="rg"><span>Sensibilidade <b id="colorThrOut">${Math.round((1-s.thr)*100)} %</b></span><input type="range" id="colorThr" min="0.3" max="0.85" step="0.01" value="${s.thr}"></label><p class="hint" id="colorInfo">${s.error?'Erro: '+s.error:(s.info?say(s.info):'')}</p></div>`;}
  function injectUI(){
   const E=window.FenixBg._E();if(!E||E.noai)return;const panel=document.getElementById('bgmPanel');
   if(!panel||!panel.querySelector('#pClean')||panel.querySelector('#colorBox'))return;
   const s=STATE.get(E);if(!s)return;
   panel.insertAdjacentHTML('beforeend',boxHTML(s));
   const on=panel.querySelector('#colorOn'),thr=panel.querySelector('#colorThr'),out=panel.querySelector('#colorThrOut'),info=panel.querySelector('#colorInfo');
-  const run=()=>{try{const i=apply(E);info.textContent=i.restored!=null?'Recuperados '+i.restored+' pontos.':'';}catch(err){info.textContent='Erro: '+String(err&&err.message||err);}nudge();};
+  const run=()=>{try{info.textContent=say(apply(E));}catch(err){info.textContent='Erro: '+String(err&&err.message||err);}nudge();};
   on.onchange=()=>{s.on=on.checked;run();};
   thr.oninput=()=>{out.textContent=Math.round((1-Number(thr.value))*100)+' %';};
   thr.onchange=()=>{s.thr=Number(thr.value);run();};
@@ -86,12 +100,12 @@
  function check(){
   const E=window.FenixBg._E();if(!E||E.noai||!E.raw||!document.getElementById('bgmStage'))return;
   if(!STATE.has(E)){let info={};try{info=apply(E);}catch(err){console.error(err);STATE.set(E,{on:false,thr:.55,base:E.raw,error:String(err&&err.message||err)});}
-   nudge();if(typeof toast==='function')toast(info.restored?'Recuperei '+info.restored+' pontos de roupa por cor. Podes ajustar em "Recuperar roupa".':'Recuperação por cor: nada a recuperar.',4500);}
+   nudge();if(typeof toast==='function')toast(info.restored?'Recuperei '+info.restored+' pontos de roupa por cor'+(info.boost?' (modo reforçado)':'')+'. Podes ajustar em "Recuperar roupa".':'Recuperação por cor: nada a recuperar.',4500);}
   injectUI();
  }
  let queued=false;
  const mo=new MutationObserver(()=>{if(queued)return;queued=true;Promise.resolve().then(()=>{queued=false;try{check();}catch(e){console.error(e);}});});
  mo.observe(document.body,{childList:true,subtree:true});
  setInterval(()=>{try{check();}catch(e){}},700);
- window.FenixBgColor={blurF,colorRestore,bigComponents,hullMask,morphBin,apply};
+ window.FenixBgColor={blurF,colorRestore,bigComponents,hullMask,morphBin,grow,apply};
 })();
