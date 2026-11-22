@@ -112,7 +112,7 @@
  function boxHTML(){
   const layerOk=hasLayers()&&(()=>{const l=lxSelected();return l&&l.kind==='image';})();
   return `<div class="box lab-card" id="bgBox"><h3>Remover fundo (experimental)</h3><p class="hint">Recorta o fundo de uma foto com um modelo que corre no telemóvel. A primeira vez descarrega o modelo (cerca de 44 MB no modo leve, cerca de 170 MB no modo rápido); depois fica guardado. Precisa de internet só nessa altura. Fotos grandes são reduzidas para 2048 px.</p>
-   <label class="fld">Imagem<select id="bgSource"><option value="file" ${B.source==='file'?'selected':''}>Escolher uma foto</option><option value="frame" ${B.source==='frame'?'selected':''}>Frame do vídeo na agulha</option>${layerOk?`<option value="layer" ${B.source==='layer'?'selected':''}>Câmara de foto selecionada</option>`:''}</select></label>
+   <label class="fld">Imagem<select id="bgSource"><option value="file" ${B.source==='file'?'selected':''}>Escolher uma foto</option><option value="frame" ${B.source==='frame'?'selected':''}>Frame do vídeo na agulha</option>${layerOk?`<option value="layer" ${B.source==='layer'?'selected':''}>Camada de foto selecionada</option>`:''}</select></label>
    <label class="fld">Modo<select id="bgMode"><option value="cpu" ${B.mode==='cpu'?'selected':''}>Leve (processador, mais compatível)</option><option value="gpu" ${B.mode==='gpu'?'selected':''}>Rápido (WebGPU, descarrega mais)</option></select></label>
    <div class="btnrow"><button class="btn primary" id="bgRun">Remover fundo</button></div><p class="hint" id="bgStatus">${B.status||''}</p><p class="hint">Vídeo com fundo removido, aumentar resolução e retoque de rosto ainda não existem.</p></div>`;
  }
