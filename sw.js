@@ -1,6 +1,6 @@
 
-const V='fenixcut-v16-lab-1';
-const SHELL=['./','./index.html','./style.css','./fx.js','./export.js','./captions.js','./ai.js','./app.js','./project.js','./studio.js','./studio-plus.js','./studio-models.js','./studio-tools.js','./studio-flow.js','./studio-edit.js','./studio-lab.js','./asr-worker.js','./manifest.json','./icon-192.png','./icon-512.png'];
+const V='fenixcut-v17-bg-1';
+const SHELL=['./','./index.html','./style.css','./fx.js','./export.js','./captions.js','./ai.js','./app.js','./project.js','./studio.js','./studio-plus.js','./studio-models.js','./studio-tools.js','./studio-flow.js','./studio-edit.js','./studio-lab.js','./studio-bg.js','./asr-worker.js','./manifest.json','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(V).then(c=>c.addAll(SHELL)));self.skipWaiting();});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x.startsWith('fenixcut-')&&x!==V).map(x=>caches.delete(x)))).then(()=>self.clients.claim()));});
 const CDN=['cdn.jsdelivr.net','esm.sh','fonts.googleapis.com','fonts.gstatic.com','api.fontshare.com','cdn.fontshare.com'];
