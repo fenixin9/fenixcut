@@ -1,0 +1,1 @@
+<conteúdo integral do studio-carousel.js corrigido>
