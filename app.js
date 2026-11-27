@@ -1,1 +1,1 @@
-<conteúdo integral do app.js com o patch ao renderScene>
+<conteúdo integral do app.js real com o patch ao renderScene>

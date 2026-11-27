@@ -1,1 +1,1 @@
-<conteúdo integral do sw.js com a nova versão de cache>
+<conteúdo integral do sw.js real>
