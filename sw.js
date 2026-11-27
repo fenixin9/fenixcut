@@ -1,1 +1,1 @@
-<sw.js real completo com cache v30-carousel-1>
+<conteúdo real completo do sw.js do commit V29 78cdd77>

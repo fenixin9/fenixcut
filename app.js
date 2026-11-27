@@ -1,1 +1,1 @@
-<app.js real completo com o patch ao renderScene — 49768 caracteres>
+<conteúdo real completo do app.js do commit V29 78cdd77>
