@@ -1,1 +1,1 @@
-<conteúdo integral do studio-carousel.js corrigido>
+<studio-carousel.js real completo corrigido — 12250 caracteres>

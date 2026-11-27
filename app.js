@@ -1,1 +1,1 @@
-<conteúdo integral do app.js real com o patch ao renderScene>
+<app.js real completo com o patch ao renderScene — 49768 caracteres>

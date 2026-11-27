@@ -1,1 +1,1 @@
-<conteúdo integral do sw.js real>
+<sw.js real completo com cache v30-carousel-1>
